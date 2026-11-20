@@ -68,4 +68,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps
 
 ---
 
-## 灵感致敬 BookerLiu/GeekDesk
+## 致敬 / Acknowledgements
+本项目的设计灵感致敬开源项目 [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk)（基于 C++20 + Win32 + Direct2D 从零重写，聚焦极简与低内存占用）。
