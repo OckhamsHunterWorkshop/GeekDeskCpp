@@ -309,6 +309,7 @@ TEST_CASE("json codec round-trips Schema v1, ignores deprecated Everything field
     s.appearance.wallpaperFileName = "bg.png";
     s.appearance.fontSize = 15;
     s.appearance.fontFamily = "Segoe UI";
+    s.appearance.language = UiLanguage::EnUs;
     s.state.lastSelectedGroupId = "group-123";
 
     const std::string sJson = SerializeSettings(s);
@@ -323,6 +324,7 @@ TEST_CASE("json codec round-trips Schema v1, ignores deprecated Everything field
     CHECK(sParsed.value.appearance.wallpaperFileName == "bg.png");
     CHECK(sParsed.value.appearance.fontSize == 15);
     CHECK(sParsed.value.appearance.fontFamily == "Segoe UI");
+    CHECK(sParsed.value.appearance.language == UiLanguage::EnUs);
     CHECK(sParsed.value.state.lastSelectedGroupId == "group-123");
 
     // Deprecated enableExternalEverything field + BOM + trailing comma tolerated

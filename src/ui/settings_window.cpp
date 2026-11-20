@@ -1,6 +1,7 @@
 #include "ui/settings_window.hpp"
 
 #include "core/hotkey_parser.hpp"
+#include "core/i18n.hpp"
 #include "core/placement_math.hpp"
 #include "core/utf8.hpp"
 #include "platform/backdrop.hpp"
@@ -81,12 +82,17 @@ core::SortOrder IdxToSort(int idx) noexcept {
     }
 }
 
-void AddSortItems(HWND combo) {
-    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u81EA\u5B9A\u4E49\u987A\u5E8F (Custom)"));
-    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u542F\u52A8\u6B21\u6570\u5347\u5E8F"));
-    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u542F\u52A8\u6B21\u6570\u964D\u5E8F"));
-    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u540D\u79F0 A-Z \u5347\u5E8F"));
-    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u540D\u79F0 Z-A \u964D\u5E8F"));
+void AddSortItems(HWND combo, bool en) {
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Custom Order" : L"\u81EA\u5B9A\u4E49\u987A\u5E8F (Custom)"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Launch Count (Asc)" : L"\u542F\u52A8\u6B21\u6570\u5347\u5E8F"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Launch Count (Desc)" : L"\u542F\u52A8\u6B21\u6570\u964D\u5E8F"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Name (A-Z)" : L"\u540D\u79F0 A-Z \u5347\u5E8F"));
+    SendMessageW(combo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Name (Z-A)" : L"\u540D\u79F0 Z-A \u964D\u5E8F"));
 }
 
 } // namespace
@@ -146,13 +152,15 @@ void SettingsWindow::OpenOrActivate(HINSTANCE hInstance,
                              : platform::GetMonitorMetricsForPoint(POINT{0, 0});
     dpi_ = metrics.dpi;
     const int winW = ScalePx(580, dpi_);
-    const int winH = ScalePx(620, dpi_);
+    const int winH = ScalePx(656, dpi_);
     const auto pos = core::ComputeCenteredPosition(winW, winH, metrics.workArea);
+    const bool en = core::IsEnglishUi(working_.appearance.language);
 
-    hwnd_ = CreateWindowExW(0, kSettingsClassName,
-                            L"GeekDeskCpp \u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D\u4E2D\u5FC3",
-                            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, pos.x, pos.y,
-                            winW, winH, ownerHwnd, nullptr, hInstance, this);
+    hwnd_ = CreateWindowExW(
+        0, kSettingsClassName,
+        en ? L"GeekDeskCpp Settings & Backup" : L"GeekDeskCpp \u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D\u4E2D\u5FC3",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, pos.x, pos.y, winW, winH, ownerHwnd, nullptr,
+        hInstance, this);
     if (hwnd_ == nullptr) {
         return;
     }
@@ -385,7 +393,14 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         // Combos
         if (code == CBN_SELCHANGE) {
-            if (id == kIdThemeCombo) {
+            if (id == kIdLanguageCombo) {
+                const int sel = static_cast<int>(SendMessageW(languageCombo_, CB_GETCURSEL, 0, 0));
+                working_.appearance.language =
+                    static_cast<core::UiLanguage>(std::clamp(sel, 0, 2));
+                EmitSettingsChanged();
+                RebuildLanguageUi();
+                return 0;
+            } else if (id == kIdThemeCombo) {
                 const int sel = static_cast<int>(SendMessageW(themeCombo_, CB_GETCURSEL, 0, 0));
                 working_.appearance.theme = static_cast<core::ThemeMode>(std::clamp(sel, 0, 2));
                 RebuildThemeBrushes();
@@ -618,7 +633,37 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
 }
 
+void SettingsWindow::RebuildLanguageUi() {
+    if (hwnd_ == nullptr) {
+        return;
+    }
+    const bool en = core::IsEnglishUi(working_.appearance.language);
+    SetWindowTextW(hwnd_, en ? L"GeekDeskCpp Settings & Backup"
+                             : L"GeekDeskCpp \u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D\u4E2D\u5FC3");
+
+    std::vector<HWND> children;
+    EnumChildWindows(
+        hwnd_,
+        [](HWND ch, LPARAM lParam) -> BOOL {
+            reinterpret_cast<std::vector<HWND>*>(lParam)->push_back(ch);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&children));
+    for (HWND ch : children) {
+        DestroyWindow(ch);
+    }
+    for (auto& vec : tabPages_) {
+        vec.clear();
+    }
+    BuildControls();
+    PopulateFromSettings();
+    RefreshBackupListAndStats();
+    SwitchTab(activeTab_);
+    InvalidateRect(hwnd_, nullptr, TRUE);
+}
+
 void SettingsWindow::BuildControls() {
+    const bool en = core::IsEnglishUi(working_.appearance.language);
     const HINSTANCE hInst = GetModuleHandleW(nullptr);
     if (font_ != nullptr) {
         DeleteObject(font_);
@@ -637,9 +682,9 @@ void SettingsWindow::BuildControls() {
     const int tabW = (cw - pad * 2) / 3;
 
     const wchar_t* tabLabels[3] = {
-        L"\u5916\u89C2\u4E0E\u6750\u8D28",
-        L"\u547C\u51FA\u4E0E\u884C\u4E3A",
-        L"\u6570\u636E\u4E0E\u5907\u4EFD\u6062\u590D",
+        en ? L"Appearance" : L"\u5916\u89C2\u4E0E\u6750\u8D28",
+        en ? L"Activation & Behavior" : L"\u547C\u51FA\u4E0E\u884C\u4E3A",
+        en ? L"Data & Backup" : L"\u6570\u636E\u4E0E\u5907\u4EFD\u6062\u590D",
     };
     for (int i = 0; i < 3; ++i) {
         tabButtons_[i] = CreateWindowExW(
@@ -669,28 +714,51 @@ void SettingsWindow::BuildControls() {
     const int rowH = ScalePx(28, dpi_);
     const int gap = ScalePx(10, dpi_);
 
-    addLabel(0, L"\u4E3B\u9898\u6A21\u5F0F:", px, y0 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(0, en ? L"Language:" : L"\u754C\u9762\u8BED\u8A00:", px, y0 + ScalePx(4, dpi_), labelW,
+             ScalePx(20, dpi_));
+    languageCombo_ = addToTab(
+        0, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
+                           ctrlX, y0, ScalePx(180, dpi_), ScalePx(120, dpi_), hwnd_,
+                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdLanguageCombo)), hInst,
+                           nullptr));
+    SendMessageW(languageCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Follow System (Auto)" : L"\u8DDF\u968F\u7CFB\u7EDF (Auto)"));
+    SendMessageW(languageCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u7B80\u4F53\u4E2D\u6587"));
+    SendMessageW(languageCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"English"));
+    y0 += rowH + gap;
+
+    addLabel(0, en ? L"Theme Mode:" : L"\u4E3B\u9898\u6A21\u5F0F:", px, y0 + ScalePx(4, dpi_), labelW,
+             ScalePx(20, dpi_));
     themeCombo_ = addToTab(
         0, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y0, ScalePx(180, dpi_), ScalePx(120, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdThemeCombo)), hInst,
                            nullptr));
-    SendMessageW(themeCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u8DDF\u968F\u7CFB\u7EDF (System)"));
-    SendMessageW(themeCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6D45\u8272 (Light)"));
-    SendMessageW(themeCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6DF1\u8272 (Dark)"));
+    SendMessageW(themeCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Follow System" : L"\u8DDF\u968F\u7CFB\u7EDF (System)"));
+    SendMessageW(themeCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Light" : L"\u6D45\u8272 (Light)"));
+    SendMessageW(themeCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Dark" : L"\u6DF1\u8272 (Dark)"));
     y0 += rowH + gap;
 
-    addLabel(0, L"\u80CC\u666F\u6750\u8D28:", px, y0 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(0, en ? L"Backdrop:" : L"\u80CC\u666F\u6750\u8D28:", px, y0 + ScalePx(4, dpi_), labelW,
+             ScalePx(20, dpi_));
     backdropCombo_ = addToTab(
         0, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y0, ScalePx(220, dpi_), ScalePx(160, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdBackdropCombo)), hInst,
                            nullptr));
-    SendMessageW(backdropCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u4E9A\u514B\u529B (Acrylic)"));
-    SendMessageW(backdropCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u4E91\u6BCD (Mica)"));
-    SendMessageW(backdropCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6DF1\u4E91\u6BCD (MicaAlt)"));
-    SendMessageW(backdropCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u81EA\u5B9A\u4E49\u58C1\u7EB8 (Wallpaper)"));
-    SendMessageW(backdropCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u53CC\u8272\u6E10\u53D8 (Gradient)"));
+    SendMessageW(backdropCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Acrylic" : L"\u4E9A\u514B\u529B (Acrylic)"));
+    SendMessageW(backdropCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Mica" : L"\u4E91\u6BCD (Mica)"));
+    SendMessageW(backdropCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Mica Alt" : L"\u6DF1\u4E91\u6BCD (MicaAlt)"));
+    SendMessageW(backdropCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Custom Wallpaper" : L"\u81EA\u5B9A\u4E49\u58C1\u7EB8 (Wallpaper)"));
+    SendMessageW(backdropCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Dual Gradient" : L"\u53CC\u8272\u6E10\u53D8 (Gradient)"));
     y0 += rowH + gap;
 
     const int valW = ScalePx(58, dpi_);
@@ -716,16 +784,18 @@ void SettingsWindow::BuildControls() {
         y0 += ScalePx(38, dpi_);
     };
 
-    makeSliderRow(L"\u80CC\u666F\u4E0D\u900F\u660E\u5EA6:", kIdBgOpacitySlider, kIdBgOpacityVal, 0, 100, 10,
-                  bgOpacitySlider_, bgOpacityVal_);
-    makeSliderRow(L"\u5361\u7247\u906E\u7F69\u6D53\u5EA6:", kIdCardOpacitySlider, kIdCardOpacityVal, 0, 100, 10,
-                  cardOpacitySlider_, cardOpacityVal_);
-    makeSliderRow(L"\u56FE\u6807\u5C3A\u5BF8:", kIdIconSizeSlider, kIdIconSizeVal, 32, 80, 8,
-                  iconSizeSlider_, iconSizeVal_);
-    makeSliderRow(L"\u7A97\u53E3\u5706\u89D2:", kIdCornerRadiusSlider, kIdCornerRadiusVal, 0, 24, 4,
-                  cornerSlider_, cornerVal_);
+    makeSliderRow(en ? L"Bg Opacity:" : L"\u80CC\u666F\u4E0D\u900F\u660E\u5EA6:", kIdBgOpacitySlider,
+                  kIdBgOpacityVal, 0, 100, 10, bgOpacitySlider_, bgOpacityVal_);
+    makeSliderRow(en ? L"Card Tint:" : L"\u5361\u7247\u906E\u7F69\u6D53\u5EA6:",
+                  kIdCardOpacitySlider, kIdCardOpacityVal, 0, 100, 10, cardOpacitySlider_,
+                  cardOpacityVal_);
+    makeSliderRow(en ? L"Icon Size:" : L"\u56FE\u6807\u5C3A\u5BF8:", kIdIconSizeSlider,
+                  kIdIconSizeVal, 32, 80, 8, iconSizeSlider_, iconSizeVal_);
+    makeSliderRow(en ? L"Corner Radius:" : L"\u7A97\u53E3\u5706\u89D2:", kIdCornerRadiusSlider,
+                  kIdCornerRadiusVal, 0, 24, 4, cornerSlider_, cornerVal_);
 
-    addLabel(0, L"\u754C\u9762\u5B57\u4F53:", px, y0 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(0, en ? L"UI Font:" : L"\u754C\u9762\u5B57\u4F53:", px, y0 + ScalePx(4, dpi_), labelW,
+             ScalePx(20, dpi_));
     fontFamilyCombo_ = addToTab(
         0, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y0, ScalePx(220, dpi_), ScalePx(180, dpi_), hwnd_,
@@ -739,8 +809,8 @@ void SettingsWindow::BuildControls() {
     }
     y0 += rowH + gap;
 
-    makeSliderRow(L"\u5B57\u4F53\u5927\u5C0F:", kIdFontSizeSlider, kIdFontSizeVal, 10, 20, 2,
-                  fontSizeSlider_, fontSizeVal_);
+    makeSliderRow(en ? L"Font Size:" : L"\u5B57\u4F53\u5927\u5C0F:", kIdFontSizeSlider,
+                  kIdFontSizeVal, 10, 20, 2, fontSizeSlider_, fontSizeVal_);
 
     const int boxSz = ScalePx(18, dpi_);
     showTitleCheck_ = addToTab(
@@ -750,27 +820,30 @@ void SettingsWindow::BuildControls() {
                            nullptr));
     addToTab(0, CreateWindowExW(
                     0, L"STATIC",
-                    L"\u5728\u56FE\u6807\u4E0B\u65B9\u663E\u793A\u5E94\u7528\u540D\u79F0",
+                    en ? L"Show item labels below icons"
+                       : L"\u5728\u56FE\u6807\u4E0B\u65B9\u663E\u793A\u5E94\u7528\u540D\u79F0",
                     WS_CHILD | SS_NOTIFY, ctrlX + boxSz + ScalePx(6, dpi_), y0 + ScalePx(2, dpi_),
                     ctrlW - boxSz - ScalePx(6, dpi_), ScalePx(20, dpi_), hwnd_,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdShowTitleCheck + 1000)), hInst,
                     nullptr));
     y0 += ScalePx(34, dpi_);
 
-    addLabel(0, L"\u5F53\u524D\u58C1\u7EB8:", px, y0 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(0, en ? L"Wallpaper:" : L"\u5F53\u524D\u58C1\u7EB8:", px, y0 + ScalePx(4, dpi_), labelW,
+             ScalePx(20, dpi_));
     wallpaperLabel_ = addToTab(
-        0, CreateWindowExW(0, L"STATIC", L"\u672A\u9009\u62E9", WS_CHILD, ctrlX,
+        0, CreateWindowExW(0, L"STATIC", en ? L"None" : L"\u672A\u9009\u62E9", WS_CHILD, ctrlX,
                            y0 + ScalePx(4, dpi_), ctrlW, ScalePx(20, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdWallpaperLabel)), hInst,
                            nullptr));
     y0 += ScalePx(28, dpi_);
-    addToTab(0, CreateWindowExW(0, L"BUTTON", L"\u9009\u62E9\u58C1\u7EB8...", WS_CHILD | WS_TABSTOP,
-                                ctrlX, y0, ScalePx(110, dpi_), ScalePx(28, dpi_), hwnd_,
+    addToTab(0, CreateWindowExW(0, L"BUTTON", en ? L"Choose Image..." : L"\u9009\u62E9\u58C1\u7EB8...",
+                                WS_CHILD | WS_TABSTOP, ctrlX, y0, ScalePx(115, dpi_),
+                                ScalePx(28, dpi_), hwnd_,
                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPickWallpaperBtn)),
                                 hInst, nullptr));
-    addToTab(0, CreateWindowExW(0, L"BUTTON", L"\u6E05\u9664\u58C1\u7EB8", WS_CHILD | WS_TABSTOP,
-                                ctrlX + ScalePx(120, dpi_), y0, ScalePx(100, dpi_),
-                                ScalePx(28, dpi_), hwnd_,
+    addToTab(0, CreateWindowExW(0, L"BUTTON", en ? L"Clear" : L"\u6E05\u9664\u58C1\u7EB8",
+                                WS_CHILD | WS_TABSTOP, ctrlX + ScalePx(125, dpi_), y0,
+                                ScalePx(100, dpi_), ScalePx(28, dpi_), hwnd_,
                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdClearWallpaperBtn)),
                                 hInst, nullptr));
 
@@ -782,7 +855,8 @@ void SettingsWindow::BuildControls() {
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdEnableHotKeyCheck)),
                            hInst, nullptr));
     addToTab(1, CreateWindowExW(
-                    0, L"STATIC", L"\u542F\u7528\u5168\u5C40\u547C\u51FA\u70ED\u952E:",
+                    0, L"STATIC",
+                    en ? L"Global Hotkey:" : L"\u542F\u7528\u5168\u5C40\u547C\u51FA\u70ED\u952E:",
                     WS_CHILD | SS_NOTIFY, px + boxSz + ScalePx(6, dpi_), y1 + ScalePx(4, dpi_),
                     ScalePx(130, dpi_), ScalePx(20, dpi_), hwnd_,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdEnableHotKeyCheck + 1000)),
@@ -815,53 +889,73 @@ void SettingsWindow::BuildControls() {
         return h;
     };
 
-    middleMouseCheck_ = addCheck(kIdMiddleMouseCheck, L"\u542F\u7528\u9F20\u6807\u4E2D\u952E\u547C\u51FA / \u9690\u85CF");
-    followMouseCheck_ =
-        addCheck(kIdFollowMouseCheck, L"\u547C\u51FA\u65F6\u8DDF\u968F\u9F20\u6807\u4F4D\u7F6E\uFF08\u5149\u6807\u5BF9\u9F50\u7A97\u53E3\u5DE6\u4E0A\u89D2\uFF09");
-    ignoreFullscreenCheck_ =
-        addCheck(kIdIgnoreFullscreenCheck, L"\u5F53\u524D\u53F0\u5168\u5C4F\u6E38\u620F / \u89C6\u9891\u65F6\u5C4F\u853D\u547C\u51FA");
-    doubleClickCheck_ = addCheck(kIdDoubleClickCheck, L"\u53CC\u51FB\u6253\u5F00\u5E94\u7528\uFF08\u53D6\u6D88\u52FE\u9009\u4E3A\u5355\u51FB\u542F\u52A8\uFF09");
-    hoverGroupCheck_ = addCheck(kIdHoverGroupCheck, L"\u9F20\u6807\u60AC\u505C\u5DE6\u4FA7\u5206\u7EC4\u81EA\u52A8\u5207\u6362");
-    autoStartCheck_ = addCheck(kIdAutoStartCheck, L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
+    middleMouseCheck_ = addCheck(
+        kIdMiddleMouseCheck,
+        en ? L"Toggle with middle mouse button" : L"\u542F\u7528\u9F20\u6807\u4E2D\u952E\u547C\u51FA / \u9690\u85CF");
+    followMouseCheck_ = addCheck(
+        kIdFollowMouseCheck,
+        en ? L"Follow mouse cursor (align top-left corner)"
+           : L"\u547C\u51FA\u65F6\u8DDF\u968F\u9F20\u6807\u4F4D\u7F6E\uFF08\u5149\u6807\u5BF9\u9F50\u7A97\u53E3\u5DE6\u4E0A\u89D2\uFF09");
+    ignoreFullscreenCheck_ = addCheck(
+        kIdIgnoreFullscreenCheck,
+        en ? L"Ignore hotkeys during fullscreen apps / games"
+           : L"\u5F53\u524D\u53F0\u5168\u5C4F\u6E38\u620F / \u89C6\u9891\u65F6\u5C4F\u853D\u547C\u51FA");
+    doubleClickCheck_ = addCheck(
+        kIdDoubleClickCheck,
+        en ? L"Double-click to launch (unchecked = single-click)"
+           : L"\u53CC\u51FB\u6253\u5F00\u5E94\u7528\uFF08\u53D6\u6D88\u52FE\u9009\u4E3A\u5355\u51FB\u542F\u52A8\uFF09");
+    hoverGroupCheck_ = addCheck(
+        kIdHoverGroupCheck,
+        en ? L"Switch group automatically on hover" : L"\u9F20\u6807\u60AC\u505C\u5DE6\u4FA7\u5206\u7EC4\u81EA\u52A8\u5207\u6362");
+    autoStartCheck_ = addCheck(kIdAutoStartCheck, en ? L"Run at Windows startup" : L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
     y1 += ScalePx(6, dpi_);
 
-    addLabel(1, L"\u7A97\u53E3\u9690\u85CF\u7B56\u7565:", px, y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(1, en ? L"Hide Policy:" : L"\u7A97\u53E3\u9690\u85CF\u7B56\u7565:", px,
+             y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
     hidePolicyCombo_ = addToTab(
         1, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y1, ScalePx(230, dpi_), ScalePx(120, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHidePolicyCombo)), hInst,
                            nullptr));
-    SendMessageW(hidePolicyCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u5931\u53BB\u7126\u70B9\u65F6\u81EA\u52A8\u9690\u85CF"));
-    SendMessageW(hidePolicyCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u542F\u52A8\u5E94\u7528\u540E\u9690\u85CF"));
-    SendMessageW(hidePolicyCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u4EC5\u624B\u52A8 / \u70ED\u952E\u9690\u85CF"));
+    SendMessageW(hidePolicyCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Hide on focus lost" : L"\u5931\u53BB\u7126\u70B9\u65F6\u81EA\u52A8\u9690\u85CF"));
+    SendMessageW(hidePolicyCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Hide after launching item" : L"\u542F\u52A8\u5E94\u7528\u540E\u9690\u85CF"));
+    SendMessageW(hidePolicyCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Manual / hotkey only" : L"\u4EC5\u624B\u52A8 / \u70ED\u952E\u9690\u85CF"));
     y1 += ScalePx(34, dpi_);
 
-    addLabel(1, L"\u641C\u7D22\u89E6\u53D1\u65B9\u5F0F:", px, y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(1, en ? L"Search Trigger:" : L"\u641C\u7D22\u89E6\u53D1\u65B9\u5F0F:", px,
+             y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
     searchActCombo_ = addToTab(
         1, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y1, ScalePx(230, dpi_), ScalePx(100, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdSearchActCombo)), hInst,
                            nullptr));
-    SendMessageW(searchActCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ctrl+F \u805A\u7126\u641C\u7D22\u6846"));
-    SendMessageW(searchActCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u76F4\u63A5\u952E\u5165\u5B57\u7B26\u5373\u641C\u7D22"));
+    SendMessageW(searchActCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Ctrl+F to focus search" : L"Ctrl+F \u805A\u7126\u641C\u7D22\u6846"));
+    SendMessageW(searchActCombo_, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(en ? L"Type anywhere to search" : L"\u76F4\u63A5\u952E\u5165\u5B57\u7B26\u5373\u641C\u7D22"));
     y1 += ScalePx(34, dpi_);
 
-    addLabel(1, L"\u5206\u7EC4\u6392\u5E8F:", px, y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(1, en ? L"Group Sort:" : L"\u5206\u7EC4\u6392\u5E8F:", px, y1 + ScalePx(4, dpi_),
+             labelW, ScalePx(20, dpi_));
     groupSortCombo_ = addToTab(
         1, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y1, ScalePx(230, dpi_), ScalePx(150, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdGroupSortCombo)), hInst,
                            nullptr));
-    AddSortItems(groupSortCombo_);
+    AddSortItems(groupSortCombo_, en);
     y1 += ScalePx(34, dpi_);
 
-    addLabel(1, L"\u6761\u76EE\u6392\u5E8F:", px, y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    addLabel(1, en ? L"Item Sort:" : L"\u6761\u76EE\u6392\u5E8F:", px, y1 + ScalePx(4, dpi_),
+             labelW, ScalePx(20, dpi_));
     itemSortCombo_ = addToTab(
         1, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
                            ctrlX, y1, ScalePx(230, dpi_), ScalePx(150, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemSortCombo)), hInst,
                            nullptr));
-    AddSortItems(itemSortCombo_);
+    AddSortItems(itemSortCombo_, en);
 
     // === Tab 2: Data, Backup & Restore ===
     int y2 = py;
@@ -871,35 +965,39 @@ void SettingsWindow::BuildControls() {
                            nullptr));
     y2 += ScalePx(44, dpi_);
 
-    addLabel(2, L"\u6BCF\u65E5\u5907\u4EFD\u4FDD\u7559(\u5929):", px, y2 + ScalePx(4, dpi_), labelW,
-             ScalePx(20, dpi_));
+    addLabel(2, en ? L"Retention (Days):" : L"\u6BCF\u65E5\u5907\u4EFD\u4FDD\u7559(\u5929):", px,
+             y2 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
     retentionEdit_ = addToTab(
         2, CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"7",
                            WS_CHILD | WS_TABSTOP | ES_NUMBER, ctrlX, y2, ScalePx(70, dpi_),
                            ScalePx(26, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRetentionEdit)), hInst,
                            nullptr));
-    addToTab(2, CreateWindowExW(0, L"BUTTON", L"\u5E94\u7528", WS_CHILD | WS_TABSTOP,
-                                ctrlX + ScalePx(80, dpi_), y2, ScalePx(68, dpi_),
-                                ScalePx(26, dpi_), hwnd_,
+    addToTab(2, CreateWindowExW(0, L"BUTTON", en ? L"Apply" : L"\u5E94\u7528",
+                                WS_CHILD | WS_TABSTOP, ctrlX + ScalePx(80, dpi_), y2,
+                                ScalePx(68, dpi_), ScalePx(26, dpi_), hwnd_,
                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdApplyRetentionBtn)),
                                 hInst, nullptr));
     y2 += ScalePx(36, dpi_);
 
     const int halfBtnW = (pw - ScalePx(10, dpi_)) / 2;
-    addToTab(2, CreateWindowExW(0, L"BUTTON", L"\u5BFC\u51FA\u5B8C\u6574\u5907\u4EFD (.gdbackup)...",
-                                WS_CHILD | WS_TABSTOP, px, y2, halfBtnW, ScalePx(32, dpi_), hwnd_,
-                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdExportBackupBtn)),
-                                hInst, nullptr));
-    addToTab(2, CreateWindowExW(0, L"BUTTON", L"\u9009\u62E9\u5907\u4EFD\u5305\u6062\u590D (.gdbackup)...",
-                                WS_CHILD | WS_TABSTOP, px + halfBtnW + ScalePx(10, dpi_), y2,
-                                halfBtnW, ScalePx(32, dpi_), hwnd_,
-                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdImportBackupBtn)),
-                                hInst, nullptr));
+    addToTab(2, CreateWindowExW(
+                    0, L"BUTTON",
+                    en ? L"Export Backup (.gdbackup)..." : L"\u5BFC\u51FA\u5B8C\u6574\u5907\u4EFD (.gdbackup)...",
+                    WS_CHILD | WS_TABSTOP, px, y2, halfBtnW, ScalePx(32, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdExportBackupBtn)), hInst,
+                    nullptr));
+    addToTab(2, CreateWindowExW(
+                    0, L"BUTTON",
+                    en ? L"Restore from File (.gdbackup)..." : L"\u9009\u62E9\u5907\u4EFD\u5305\u6062\u590D (.gdbackup)...",
+                    WS_CHILD | WS_TABSTOP, px + halfBtnW + ScalePx(10, dpi_), y2, halfBtnW,
+                    ScalePx(32, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdImportBackupBtn)), hInst,
+                    nullptr));
     y2 += ScalePx(42, dpi_);
 
-    addLabel(2, L"\u56DE\u6EDA\u70B9\u4E0E\u5907\u4EFD\u5FEB\u7167 (pre-restore-*):", px, y2, pw,
-             ScalePx(20, dpi_));
+    addLabel(2, en ? L"Snapshots & Rollback (pre-restore-*):" : L"\u56DE\u6EDA\u70B9\u4E0E\u5907\u4EFD\u5FEB\u7167 (pre-restore-*):",
+             px, y2, pw, ScalePx(20, dpi_));
     y2 += ScalePx(22, dpi_);
 
     backupList_ = addToTab(
@@ -911,34 +1009,39 @@ void SettingsWindow::BuildControls() {
     y2 += ScalePx(148, dpi_);
 
     restoreSelectedBtn_ = addToTab(
-        2, CreateWindowExW(0, L"BUTTON", L"\u4ECE\u9009\u4E2D\u7684 .gdbackup \u5FEB\u7167\u6062\u590D",
-                           WS_CHILD | WS_TABSTOP, px, y2, pw, ScalePx(30, dpi_), hwnd_,
-                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRestoreSelectedBtn)),
-                           hInst, nullptr));
+        2, CreateWindowExW(
+               0, L"BUTTON",
+               en ? L"Restore Selected .gdbackup Snapshot" : L"\u4ECE\u9009\u4E2D\u7684 .gdbackup \u5FEB\u7167\u6062\u590D",
+               WS_CHILD | WS_TABSTOP, px, y2, pw, ScalePx(30, dpi_), hwnd_,
+               reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdRestoreSelectedBtn)), hInst,
+               nullptr));
     EnableWindow(restoreSelectedBtn_, FALSE);
     y2 += ScalePx(38, dpi_);
 
     const int thirdW = (pw - ScalePx(16, dpi_)) / 3;
-    addToTab(2, CreateWindowExW(0, L"BUTTON", L"\u6253\u5F00\u6570\u636E\u76EE\u5F55", WS_CHILD | WS_TABSTOP, px,
-                                y2, thirdW, ScalePx(28, dpi_), hwnd_,
+    addToTab(2, CreateWindowExW(0, L"BUTTON", en ? L"Open Data Dir" : L"\u6253\u5F00\u6570\u636E\u76EE\u5F55",
+                                WS_CHILD | WS_TABSTOP, px, y2, thirdW, ScalePx(28, dpi_), hwnd_,
                                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdOpenDataDirBtn)),
                                 hInst, nullptr));
-    addToTab(2, CreateWindowExW(0, L"BUTTON", L"\u6253\u5F00\u5907\u4EFD\u76EE\u5F55", WS_CHILD | WS_TABSTOP,
-                                px + thirdW + ScalePx(8, dpi_), y2, thirdW, ScalePx(28, dpi_),
-                                hwnd_,
-                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdOpenBackupsDirBtn)),
-                                hInst, nullptr));
-    addToTab(2, CreateWindowExW(0, L"BUTTON", L"\u6253\u5F00\u65E5\u5FD7\u76EE\u5F55", WS_CHILD | WS_TABSTOP,
-                                px + (thirdW + ScalePx(8, dpi_)) * 2, y2, thirdW, ScalePx(28, dpi_),
-                                hwnd_,
-                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdOpenLogsDirBtn)),
-                                hInst, nullptr));
+    addToTab(2, CreateWindowExW(
+                    0, L"BUTTON", en ? L"Open Backups" : L"\u6253\u5F00\u5907\u4EFD\u76EE\u5F55",
+                    WS_CHILD | WS_TABSTOP, px + thirdW + ScalePx(8, dpi_), y2, thirdW,
+                    ScalePx(28, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdOpenBackupsDirBtn)), hInst,
+                    nullptr));
+    addToTab(2, CreateWindowExW(
+                    0, L"BUTTON", en ? L"Open Logs" : L"\u6253\u5F00\u65E5\u5FD7\u76EE\u5F55",
+                    WS_CHILD | WS_TABSTOP, px + (thirdW + ScalePx(8, dpi_)) * 2, y2, thirdW,
+                    ScalePx(28, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdOpenLogsDirBtn)), hInst,
+                    nullptr));
 
     // Bottom Close button
     const int closeW = ScalePx(96, dpi_);
     const int closeH = ScalePx(30, dpi_);
-    CreateWindowExW(0, L"BUTTON", L"\u5173\u95ED", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-                    cw - pad - closeW, ch - pad - closeH, closeW, closeH, hwnd_,
+    CreateWindowExW(0, L"BUTTON", en ? L"Close" : L"\u5173\u95ED",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP, cw - pad - closeW, ch - pad - closeH,
+                    closeW, closeH, hwnd_,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdCloseBtn)), hInst, nullptr);
 
     // Apply uniform font & Explorer/Combo dark mode theme
@@ -970,7 +1073,10 @@ void SettingsWindow::SwitchTab(int tabIndex) {
 
 void SettingsWindow::PopulateFromSettings() {
     populating_ = true;
+    const bool en = core::IsEnglishUi(working_.appearance.language);
 
+    SendMessageW(languageCombo_, CB_SETCURSEL,
+                 static_cast<WPARAM>(working_.appearance.language), 0);
     SendMessageW(themeCombo_, CB_SETCURSEL, static_cast<WPARAM>(working_.appearance.theme), 0);
     SendMessageW(backdropCombo_, CB_SETCURSEL, static_cast<WPARAM>(working_.appearance.backdrop), 0);
     SendMessageW(
@@ -1004,7 +1110,7 @@ void SettingsWindow::PopulateFromSettings() {
                    working_.appearance.wallpaperFileName.has_value() &&
                            !working_.appearance.wallpaperFileName->empty()
                        ? core::utf8::Utf8ToWide(*working_.appearance.wallpaperFileName).c_str()
-                       : L"\u672A\u9009\u62E9");
+                       : (en ? L"None" : L"\u672A\u9009\u62E9"));
     RefreshSliderLabels();
 
     SendMessageW(enableHotKeyCheck_, BM_SETCHECK,
@@ -1047,16 +1153,19 @@ void SettingsWindow::RefreshSliderLabels() {
 }
 
 void SettingsWindow::RefreshHotKeyHint() {
+    const bool en = core::IsEnglishUi(working_.appearance.language);
     if (!working_.activation.enableHotKey) {
-        SetWindowTextW(hotKeyHint_, L"\u5DF2\u7981\u7528");
+        SetWindowTextW(hotKeyHint_, en ? L"Disabled" : L"\u5DF2\u7981\u7528");
         return;
     }
     const std::string raw = core::utf8::WideToUtf8(ReadCtrlText(hotKeyEdit_));
     if (auto parsed = core::ParseHotKey(raw); parsed.has_value()) {
-        const std::wstring msg = L"\u6709\u6548: " + core::utf8::Utf8ToWide(parsed->normalized);
+        const std::wstring msg =
+            (en ? L"Active: " : L"\u6709\u6548: ") + core::utf8::Utf8ToWide(parsed->normalized);
         SetWindowTextW(hotKeyHint_, msg.c_str());
     } else {
-        SetWindowTextW(hotKeyHint_, L"\u683C\u5F0F\u65E0\u6548 (\u5982 Ctrl+Q)");
+        SetWindowTextW(hotKeyHint_,
+                       en ? L"Invalid (e.g. Ctrl+Q)" : L"\u683C\u5F0F\u65E0\u6548 (\u5982 Ctrl+Q)");
     }
 }
 
@@ -1064,6 +1173,7 @@ void SettingsWindow::RefreshBackupListAndStats() {
     if (hwnd_ == nullptr) {
         return;
     }
+    const bool en = core::IsEnglishUi(working_.appearance.language);
     std::size_t groupsCount = 0;
     std::size_t itemsCount = 0;
     if (callbacks_.onQueryStats) {
@@ -1072,9 +1182,10 @@ void SettingsWindow::RefreshBackupListAndStats() {
         itemsCount = i;
     }
     const std::wstring statsW =
-        L"\u6570\u636E\u76EE\u5F55: " + dataRoot_.wstring() + L"\n\u5F53\u524D\u72B6\u6001: " +
-        std::to_wstring(groupsCount) + L" \u4E2A\u5206\u7EC4 / " + std::to_wstring(itemsCount) +
-        L" \u4E2A\u542F\u52A8\u6761\u76EE";
+        (en ? L"Data Dir: " : L"\u6570\u636E\u76EE\u5F55: ") + dataRoot_.wstring() +
+        (en ? L"\nCatalog: " : L"\n\u5F53\u524D\u72B6\u6001: ") + std::to_wstring(groupsCount) +
+        (en ? L" groups / " : L" \u4E2A\u5206\u7EC4 / ") + std::to_wstring(itemsCount) +
+        (en ? L" items" : L" \u4E2A\u542F\u52A8\u6761\u76EE");
     SetWindowTextW(statsLabel_, statsW.c_str());
 
     SendMessageW(backupList_, LB_RESETCONTENT, 0, 0);
@@ -1101,8 +1212,9 @@ void SettingsWindow::RefreshBackupListAndStats() {
             const auto summary = storage::BackupManager::InspectBackupBundle(p);
             std::wstring display = p.filename().wstring();
             if (summary.ok) {
-                display += L"   [" + std::to_wstring(summary.groupCount) + L" \u7EC4 / " +
-                           std::to_wstring(summary.itemCount) + L" \u9879]";
+                display += L"   [" + std::to_wstring(summary.groupCount) +
+                           (en ? L" groups / " : L" \u7EC4 / ") +
+                           std::to_wstring(summary.itemCount) + (en ? L" items]" : L" \u9879]");
             }
             SendMessageW(backupList_, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(display.c_str()));
             snapshotPaths_.push_back(p);
@@ -1118,23 +1230,34 @@ void SettingsWindow::EmitSettingsChanged() {
 }
 
 void SettingsWindow::PerformRestoreFromPath(const std::filesystem::path& bundlePath) {
+    const bool en = core::IsEnglishUi(working_.appearance.language);
     const auto summary = storage::BackupManager::InspectBackupBundle(bundlePath);
     if (!summary.ok) {
-        MessageBoxW(hwnd_, core::utf8::Utf8ToWide("\u5907\u4EFD\u6587\u4EF6\u65E0\u6548\uFF1A" + summary.error).c_str(),
-                    L"\u6821\u9A8C\u5931\u8D25", MB_OK | MB_ICONERROR);
+        MessageBoxW(hwnd_,
+                    core::utf8::Utf8ToWide((en ? "Invalid backup file: " : "\u5907\u4EFD\u6587\u4EF6\u65E0\u6548\uFF1A") +
+                                           summary.error)
+                        .c_str(),
+                    en ? L"Verification Failed" : L"\u6821\u9A8C\u5931\u8D25", MB_OK | MB_ICONERROR);
         return;
     }
 
     const std::wstring confirmMsg =
-        L"\u5373\u5C06\u4ECE\u4EE5\u4E0B\u5907\u4EFD\u5305\u6062\u590D\u914D\u7F6E\u4E0E\u5E94\u7528\u76EE\u5F55\uFF1A\n\n"
-        L"\u6587\u4EF6: " +
-        bundlePath.filename().wstring() + L"\n\u521B\u5EFA\u65F6\u95F4: " +
-        core::utf8::Utf8ToWide(summary.createdAt) + L"\n\u5305\u542B\u5185\u5BB9: " +
-        std::to_wstring(summary.groupCount) + L" \u4E2A\u5206\u7EC4 / " +
-        std::to_wstring(summary.itemCount) +
-        L" \u4E2A\u6761\u76EE\n\n\u6062\u590D\u524D\u4F1A\u81EA\u52A8\u4E3A\u5F53\u524D\u72B6\u6001\u751F\u6210 pre-restore-* \u56DE\u6EDA\u5FEB\u7167\u3002\u662F\u5426\u7EE7\u7EED\uFF1F";
+        en ? (L"Restore settings and catalog from this backup?\n\nFile: " +
+              bundlePath.filename().wstring() + L"\nCreated: " +
+              core::utf8::Utf8ToWide(summary.createdAt) + L"\nContents: " +
+              std::to_wstring(summary.groupCount) + L" groups / " +
+              std::to_wstring(summary.itemCount) +
+              L" items\n\nA pre-restore-* rollback snapshot will be created first. Continue?")
+           : (L"\u5373\u5C06\u4ECE\u4EE5\u4E0B\u5907\u4EFD\u5305\u6062\u590D\u914D\u7F6E\u4E0E\u5E94\u7528\u76EE\u5F55\uFF1A\n\n"
+              L"\u6587\u4EF6: " +
+              bundlePath.filename().wstring() + L"\n\u521B\u5EFA\u65F6\u95F4: " +
+              core::utf8::Utf8ToWide(summary.createdAt) + L"\n\u5305\u542B\u5185\u5BB9: " +
+              std::to_wstring(summary.groupCount) + L" \u4E2A\u5206\u7EC4 / " +
+              std::to_wstring(summary.itemCount) +
+              L" \u4E2A\u6761\u76EE\n\n\u6062\u590D\u524D\u4F1A\u81EA\u52A8\u4E3A\u5F53\u524D\u72B6\u6001\u751F\u6210 pre-restore-* \u56DE\u6EDA\u5FEB\u7167\u3002\u662F\u5426\u7EE7\u7EED\uFF1F");
 
-    if (MessageBoxW(hwnd_, confirmMsg.c_str(), L"\u786E\u8BA4\u6062\u590D\u5907\u4EFD",
+    if (MessageBoxW(hwnd_, confirmMsg.c_str(),
+                    en ? L"Confirm Restore" : L"\u786E\u8BA4\u6062\u590D\u5907\u4EFD",
                     MB_YESNO | MB_ICONQUESTION) != IDYES) {
         return;
     }
@@ -1142,7 +1265,7 @@ void SettingsWindow::PerformRestoreFromPath(const std::filesystem::path& bundleP
     const auto restoreRes = storage::BackupManager::RestoreBackupBundle(dataRoot_, bundlePath);
     if (!restoreRes.ok) {
         MessageBoxW(hwnd_, core::utf8::Utf8ToWide(restoreRes.error).c_str(),
-                    L"\u6062\u590D\u5931\u8D25", MB_OK | MB_ICONERROR);
+                    en ? L"Restore Failed" : L"\u6062\u590D\u5931\u8D25", MB_OK | MB_ICONERROR);
         return;
     }
 

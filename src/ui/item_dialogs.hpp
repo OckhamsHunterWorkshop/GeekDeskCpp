@@ -15,13 +15,15 @@ namespace geekdesk::ui {
                                                              bool isDark,
                                                              std::wstring_view title,
                                                              std::wstring_view promptLabel,
-                                                             std::string_view initialUtf8);
+                                                             std::string_view initialUtf8,
+                                                             bool englishUi = false);
 
 /// Show a modal property editor for creating or editing a LaunchItem.
 /// Returns true if the user confirmed changes.
 [[nodiscard]] bool ShowItemEditDialog(HWND owner,
                                       bool isDark,
                                       std::wstring_view title,
-                                      core::LaunchItem& inOutItem);
+                                      core::LaunchItem& inOutItem,
+                                      bool englishUi = false);
 
 } // namespace geekdesk::ui

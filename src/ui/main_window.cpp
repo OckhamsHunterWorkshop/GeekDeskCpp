@@ -3,6 +3,7 @@
 #include "core/catalog_mutator.hpp"
 #include "core/catalog_sorter.hpp"
 #include "core/folder_sync.hpp"
+#include "core/i18n.hpp"
 #include "core/placement_math.hpp"
 #include "core/utf8.hpp"
 #include "platform/autostart.hpp"
@@ -20,9 +21,11 @@
 #ifndef PSAPI_VERSION
 #define PSAPI_VERSION 2
 #endif
+#include <commctrl.h>
 #include <imm.h>
 #include <ole2.h>
 #include <psapi.h>
+#include <uxtheme.h>
 #include <windowsx.h>
 #include <wtsapi32.h>
 
@@ -288,6 +291,24 @@ bool MainWindow::Create(HINSTANCE hInstance, bool registerSystemHooks) {
     }
 
     dpi_ = platform::GetWindowDpi(hwnd_);
+
+    headerTooltip_ = CreateWindowExW(
+        WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, hwnd_, nullptr, hInstance,
+        nullptr);
+    if (headerTooltip_ != nullptr) {
+        SendMessageW(headerTooltip_, TTM_SETMAXTIPWIDTH, 0, 320);
+        SendMessageW(headerTooltip_, TTM_SETDELAYTIME, TTDT_INITIAL, 300);
+        SendMessageW(headerTooltip_, TTM_SETDELAYTIME, TTDT_AUTOPOP, 5000);
+        TOOLINFOW ti{};
+        ti.cbSize = sizeof(ti);
+        ti.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+        ti.hwnd = hwnd_;
+        ti.uId = reinterpret_cast<UINT_PTR>(hwnd_);
+        ti.lpszText = const_cast<wchar_t*>(L"");
+        SendMessageW(headerTooltip_, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&ti));
+    }
+
     iconCache_.Initialize(dataRoot_, hwnd_, kMsgIconReady);
     ApplyBackdropAndPalette();
     RebuildDisplayedItems();
@@ -420,6 +441,7 @@ void MainWindow::HideWindow() {
         return;
     }
     renderPending_ = false;
+    UpdateHeaderTooltip(HeaderButton::None);
     KillTimer(hwnd_, kTimerCaret);
     KillTimer(hwnd_, kTimerHoverGroup);
     imeCompWide_.clear();
@@ -1009,10 +1031,14 @@ void MainWindow::OnMouseMove(int xPx, int yPx) {
         }
     }
 
-    const bool changed = (groupChanged || newTile != hoveredTileIdx_ || newBtn != hoveredHeaderBtn_);
+    const bool btnChanged = (newBtn != hoveredHeaderBtn_);
+    const bool changed = (groupChanged || newTile != hoveredTileIdx_ || btnChanged);
     hoveredTileIdx_ = newTile;
     hoveredHeaderBtn_ = newBtn;
 
+    if (btnChanged) {
+        UpdateHeaderTooltip(newBtn);
+    }
     if (changed) {
         RequestRender();
     }
@@ -1026,6 +1052,7 @@ void MainWindow::OnMouseLeave() {
         hoveredGroupIdx_ = -1;
         hoveredTileIdx_ = -1;
         hoveredHeaderBtn_ = HeaderButton::None;
+        UpdateHeaderTooltip(HeaderButton::None);
         RequestRender();
     }
 }
@@ -1048,6 +1075,7 @@ void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
             SetWindowPos(hwnd_, settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0,
                          0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             ScheduleSaveSettings();
+            UpdateHeaderTooltip(btn);
             RequestRender();
         } else if (btn == HeaderButton::Refresh) {
             SyncAllLinkedFolders(true);
@@ -1195,17 +1223,19 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
             catalog_.groups[static_cast<std::size_t>(gIdx)].kind == core::GroupKind::LinkedFolder;
 
         ModalGuard guard(modalDepth_);
+        const bool en = core::IsEnglishUi(settings_.appearance.language);
         const auto action = ShowGroupContextMenu(
             hwnd_, screenPt, clickedGroup, isLinked,
-            clickedGroup ? static_cast<std::size_t>(gIdx) : 0u, catalog_.groups.size());
+            clickedGroup ? static_cast<std::size_t>(gIdx) : 0u, catalog_.groups.size(), en);
         if (!action.has_value()) {
             return;
         }
 
         switch (*action) {
         case GroupMenuAction::NewManualGroup: {
-            if (auto name = ShowTextInputDialog(hwnd_, palette_.isDark, L"\u65B0\u5EFA\u666E\u901A\u5206\u7EC4",
-                                                L"\u8BF7\u8F93\u5165\u5206\u7EC4\u540D\u79F0:", "");
+            if (auto name = ShowTextInputDialog(
+                    hwnd_, palette_.isDark, en ? L"New Group" : L"\u65B0\u5EFA\u666E\u901A\u5206\u7EC4",
+                    en ? L"Group name:" : L"\u8BF7\u8F93\u5165\u5206\u7EC4\u540D\u79F0:", "", en);
                 name.has_value()) {
                 const std::size_t idx = core::AddManualGroup(catalog_, *name);
                 if (settings_.behavior.groupSort != core::SortOrder::Custom) {
@@ -1230,12 +1260,14 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
             break;
         }
         case GroupMenuAction::NewLinkedFolderGroup: {
-            if (auto folder = platform::PickFolderDialog(hwnd_, L"\u9009\u62E9\u8981\u5173\u8054\u7684\u6587\u4EF6\u5939");
+            if (auto folder = platform::PickFolderDialog(
+                    hwnd_, en ? L"Choose Folder to Link" : L"\u9009\u62E9\u8981\u5173\u8054\u7684\u6587\u4EF6\u5939");
                 folder.has_value()) {
                 const std::string defName = core::utf8::PathToUtf8(folder->filename());
-                if (auto name = ShowTextInputDialog(hwnd_, palette_.isDark,
-                                                    L"\u65B0\u5EFA\u5173\u8054\u6587\u4EF6\u5939\u5206\u7EC4",
-                                                    L"\u5206\u7EC4\u540D\u79F0:", defName);
+                if (auto name = ShowTextInputDialog(
+                        hwnd_, palette_.isDark,
+                        en ? L"New Linked Folder Group" : L"\u65B0\u5EFA\u5173\u8054\u6587\u4EF6\u5939\u5206\u7EC4",
+                        en ? L"Group name:" : L"\u5206\u7EC4\u540D\u79F0:", defName, en);
                     name.has_value()) {
                     const std::size_t idx = core::AddLinkedFolderGroup(
                         catalog_, *name, core::utf8::PathToUtf8(*folder));
@@ -1262,9 +1294,10 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
         case GroupMenuAction::RenameGroup:
             if (clickedGroup) {
                 const auto idx = static_cast<std::size_t>(gIdx);
-                if (auto name = ShowTextInputDialog(hwnd_, palette_.isDark, L"\u91CD\u547D\u540D\u5206\u7EC4",
-                                                    L"\u65B0\u5206\u7EC4\u540D\u79F0:",
-                                                    catalog_.groups[idx].name);
+                if (auto name = ShowTextInputDialog(
+                        hwnd_, palette_.isDark, en ? L"Rename Group" : L"\u91CD\u547D\u540D\u5206\u7EC4",
+                        en ? L"New group name:" : L"\u65B0\u5206\u7EC4\u540D\u79F0:",
+                        catalog_.groups[idx].name, en);
                     name.has_value()) {
                     if (core::RenameGroup(catalog_, idx, *name)) {
                         searchEngine_.Rebuild(catalog_);
@@ -1321,9 +1354,13 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
             if (clickedGroup) {
                 const auto idx = static_cast<std::size_t>(gIdx);
                 const std::wstring confirm =
-                    L"\u786E\u5B9A\u5220\u9664\u5206\u7EC4 \"" +
-                    core::utf8::Utf8ToWide(catalog_.groups[idx].name) + L"\" \u53CA\u5176\u5185\u90E8\u6761\u76EE\u5417\uFF1F";
-                if (MessageBoxW(hwnd_, confirm.c_str(), L"\u5220\u9664\u5206\u7EC4",
+                    en ? (L"Delete group \"" + core::utf8::Utf8ToWide(catalog_.groups[idx].name) +
+                          L"\" and all its items?")
+                       : (L"\u786E\u5B9A\u5220\u9664\u5206\u7EC4 \"" +
+                          core::utf8::Utf8ToWide(catalog_.groups[idx].name) +
+                          L"\" \u53CA\u5176\u5185\u90E8\u6761\u76EE\u5417\uFF1F");
+                if (MessageBoxW(hwnd_, confirm.c_str(),
+                                en ? L"Delete Group" : L"\u5220\u9664\u5206\u7EC4",
                                 MB_YESNO | MB_ICONWARNING) == IDYES) {
                     core::DeleteGroup(catalog_, idx);
                     activeGroupIndex_ =
@@ -1364,9 +1401,10 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
             foundIndices ? catalog_.groups[targetGroupIdx].items[targetItemIdx].runAsAdmin : false;
 
         ModalGuard guard(modalDepth_);
+        const bool en = core::IsEnglishUi(settings_.appearance.language);
         const auto action = ShowItemContextMenu(
             hwnd_, screenPt, clickedItem && foundIndices, isManual, curAdmin,
-            settings_.behavior.itemSort);
+            settings_.behavior.itemSort, en);
         if (!action.has_value()) {
             return;
         }
@@ -1409,8 +1447,9 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
         case ItemMenuAction::EditItem:
             if (foundIndices) {
                 core::LaunchItem& item = catalog_.groups[targetGroupIdx].items[targetItemIdx];
-                if (ShowItemEditDialog(hwnd_, palette_.isDark, L"\u7F16\u8F91\u542F\u52A8\u6761\u76EE",
-                                       item)) {
+                if (ShowItemEditDialog(hwnd_, palette_.isDark,
+                                       en ? L"Edit Launch Item" : L"\u7F16\u8F91\u542F\u52A8\u6761\u76EE",
+                                       item, en)) {
                     core::SortItems(catalog_.groups[targetGroupIdx].items,
                                     settings_.behavior.itemSort);
                     searchEngine_.Rebuild(catalog_);
@@ -1479,8 +1518,10 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 core::LaunchItem item;
                 item.id = core::utf8::GenerateUuidV4();
                 item.kind = core::ItemKind::Url;
-                if (ShowItemEditDialog(hwnd_, palette_.isDark, L"\u65B0\u589E\u81EA\u5B9A\u4E49\u6761\u76EE / \u7F51\u5740",
-                                       item)) {
+                if (ShowItemEditDialog(
+                        hwnd_, palette_.isDark,
+                        en ? L"Add URL / Custom Item" : L"\u65B0\u589E\u81EA\u5B9A\u4E49\u6761\u76EE / \u7F51\u5740",
+                        item, en)) {
                     if (core::AddItemToManualGroup(catalog_.groups[activeGroupIndex_],
                                                    std::move(item), true)) {
                         core::SortItems(catalog_.groups[activeGroupIndex_].items,
@@ -1734,7 +1775,8 @@ void MainWindow::OnTrayIconEvent(LPARAM lParam) {
         ToggleWindow();
     } else if (mouseMsg == WM_RBUTTONUP || mouseMsg == WM_CONTEXTMENU) {
         inTrayMenu_ = true;
-        const auto cmd = trayIcon_.ShowContextMenu(hwnd_, platform::IsAutoStartEnabled());
+        const bool en = core::IsEnglishUi(settings_.appearance.language);
+        const auto cmd = trayIcon_.ShowContextMenu(hwnd_, platform::IsAutoStartEnabled(), en);
         inTrayMenu_ = false;
         if (!cmd.has_value()) {
             return;
@@ -1774,6 +1816,51 @@ void MainWindow::ApplyBackdropAndPalette() {
     nativeBackdropActive_ = platform::ApplyWindowBackdrop(
         hwnd_, settings_.appearance.backdrop, isDark, settings_.appearance.cornerRadius);
     palette_ = BuildThemePalette(settings_.appearance, isDark, nativeBackdropActive_);
+    if (headerTooltip_ != nullptr) {
+        SetWindowTheme(headerTooltip_, isDark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+    }
+}
+
+void MainWindow::UpdateHeaderTooltip(HeaderButton btn) {
+    if (headerTooltip_ == nullptr || hwnd_ == nullptr) {
+        return;
+    }
+    const bool en = core::IsEnglishUi(settings_.appearance.language);
+    const wchar_t* text = L"";
+    switch (btn) {
+    case HeaderButton::Pin:
+        if (settings_.window.alwaysTopmost) {
+            text = en ? L"Unpin window (currently pinned on top)"
+                      : L"\u53D6\u6D88\u7F6E\u9876\uFF08\u5F53\u524D\u5DF2\u56FA\u5B9A\u5728\u6700\u524D\uFF09";
+        } else {
+            text = en ? L"Pin window on top"
+                      : L"\u7F6E\u9876\u7A97\u53E3\uFF08\u4FDD\u6301\u5728\u6700\u524D\uFF09";
+        }
+        break;
+    case HeaderButton::Refresh:
+        text = en ? L"Refresh & sync linked folders"
+                  : L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939";
+        break;
+    case HeaderButton::Settings:
+        text = en ? L"Open Settings & Backup"
+                  : L"\u6253\u5F00\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u4E2D\u5FC3";
+        break;
+    case HeaderButton::Hide:
+        text = en ? L"Hide to tray (Esc)"
+                  : L"\u9690\u85CF\u5230\u7CFB\u7EDF\u6258\u76D8 (Esc)";
+        break;
+    case HeaderButton::None:
+        text = L"";
+        break;
+    }
+
+    SendMessageW(headerTooltip_, TTM_POP, 0, 0);
+    TOOLINFOW ti{};
+    ti.cbSize = sizeof(ti);
+    ti.hwnd = hwnd_;
+    ti.uId = reinterpret_cast<UINT_PTR>(hwnd_);
+    ti.lpszText = const_cast<wchar_t*>(text);
+    SendMessageW(headerTooltip_, TTM_UPDATETIPTEXTW, 0, reinterpret_cast<LPARAM>(&ti));
 }
 
 void MainWindow::RebuildDisplayedItems() {
@@ -1976,19 +2063,25 @@ void MainWindow::ScheduleSaveCatalog() {
 }
 
 void MainWindow::ResetDefaultStatus() {
+    const bool en = core::IsEnglishUi(settings_.appearance.language);
     const std::string hkBadge =
         !hotKeyError_.empty()
-            ? "\u70ED\u952E\u51B2\u7A81: " + settings_.activation.hotKey
-            : (settings_.activation.enableHotKey ? ("\u70ED\u952E: " + settings_.activation.hotKey)
-                                                 : std::string("\u70ED\u952E\u5DF2\u5173\u95ED"));
+            ? std::string(core::TrU8(en, "\u70ED\u952E\u51B2\u7A81: ", "Hotkey conflict: ")) +
+                  settings_.activation.hotKey
+            : (settings_.activation.enableHotKey
+                   ? (std::string(core::TrU8(en, "\u70ED\u952E: ", "Hotkey: ")) +
+                      settings_.activation.hotKey)
+                   : std::string(core::TrU8(en, "\u70ED\u952E\u5DF2\u5173\u95ED", "Hotkey off")));
 
     if (!searchQueryWide_.empty()) {
-        statusText_ = "\u672C\u5730\u641C\u7D22\u547D\u4E2D: " +
-                      std::to_string(displayedItems_.size()) + " \u9879  |  " + hkBadge +
-                      "  |  Esc \u6E05\u7A7A";
+        statusText_ = std::string(core::TrU8(en, "\u672C\u5730\u641C\u7D22\u547D\u4E2D: ", "Search hits: ")) +
+                      std::to_string(displayedItems_.size()) +
+                      std::string(core::TrU8(en, " \u9879  |  ", " items  |  ")) + hkBadge +
+                      std::string(core::TrU8(en, "  |  Esc \u6E05\u7A7A", "  |  Esc to clear"));
     } else if (activeGroupIndex_ < catalog_.groups.size()) {
         statusText_ = catalog_.groups[activeGroupIndex_].name + " (" +
-                      std::to_string(displayedItems_.size()) + " \u9879)  |  " + hkBadge;
+                      std::to_string(displayedItems_.size()) +
+                      std::string(core::TrU8(en, " \u9879)  |  ", " items)  |  ")) + hkBadge;
     } else {
         statusText_ = hkBadge;
     }

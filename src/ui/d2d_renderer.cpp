@@ -1,5 +1,6 @@
 #include "ui/d2d_renderer.hpp"
 
+#include "core/i18n.hpp"
 #include "core/placement_math.hpp"
 #include "core/utf8.hpp"
 #include "platform/backdrop.hpp"
@@ -905,9 +906,12 @@ bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
         composedLine.insert(clampedCaret, state.imeCompWide);
     }
 
+    const bool enUi = core::IsEnglishUi(app.language);
     if (composedLine.empty()) {
-        constexpr std::wstring_view kPlaceholder =
-            L"\u641C\u7D22\u5E94\u7528 / \u62FC\u97F3\u9996\u5B57\u6BCD (Ctrl+F)";
+        const std::wstring_view kPlaceholder = core::TrW(
+            enUi,
+            L"\u641C\u7D22\u5E94\u7528 / \u62FC\u97F3\u9996\u5B57\u6BCD (Ctrl+F)",
+            L"Search apps / Pinyin (Ctrl+F)");
         solidBrush_->SetColor(ToD2D(pal.textSecondary));
         dcTarget_->DrawTextW(kPlaceholder.data(), static_cast<UINT32>(kPlaceholder.size()),
                              searchFmt_.Get(), ToRect(searchTextRect), solidBrush_.Get());
@@ -1057,8 +1061,12 @@ bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
         solidBrush_->SetColor(ToD2D(pal.textSecondary));
         const std::wstring msg =
             state.isSearchActive
-                ? L"\u672A\u627E\u5230\u5339\u914D\u7684\u672C\u5730\u5E94\u7528\u6216\u6587\u4EF6"
-                : L"\u5F53\u524D\u5206\u7EC4\u6682\u65E0\u542F\u7528\u9879\u76EE";
+                ? core::TrW(enUi,
+                            L"\u672A\u627E\u5230\u5339\u914D\u7684\u672C\u5730\u5E94\u7528\u6216\u6587\u4EF6",
+                            L"No matching local apps or files")
+                : core::TrW(enUi,
+                            L"\u5F53\u524D\u5206\u7EC4\u6682\u65E0\u542F\u7528\u9879\u76EE",
+                            L"No enabled items in this group");
         dcTarget_->DrawTextW(msg.data(), static_cast<UINT32>(msg.size()), emptyFmt_.Get(),
                              ToRect(outLayout.gridViewportRect), solidBrush_.Get());
     } else {

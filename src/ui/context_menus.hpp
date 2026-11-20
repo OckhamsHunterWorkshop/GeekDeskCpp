@@ -39,13 +39,15 @@ enum class ItemMenuAction : UINT {
                                                                   bool clickedOnGroup,
                                                                   bool isLinkedFolder,
                                                                   std::size_t groupIndex,
-                                                                  std::size_t groupCount);
+                                                                  std::size_t groupCount,
+                                                                  bool englishUi = false);
 
 [[nodiscard]] std::optional<ItemMenuAction> ShowItemContextMenu(HWND owner,
                                                                 POINT screenPt,
                                                                 bool clickedOnItem,
                                                                 bool isManualGroup,
                                                                 bool runAsAdmin,
-                                                                core::SortOrder currentItemSort);
+                                                                core::SortOrder currentItemSort,
+                                                                bool englishUi = false);
 
 } // namespace geekdesk::ui

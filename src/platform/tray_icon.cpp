@@ -89,7 +89,9 @@ bool TrayIcon::Recreate() {
     return Show(hwnd_, callbackMsg_, tooltip_);
 }
 
-std::optional<TrayCommand> TrayIcon::ShowContextMenu(HWND hwnd, bool autoStartChecked) const {
+std::optional<TrayCommand> TrayIcon::ShowContextMenu(HWND hwnd,
+                                                     bool autoStartChecked,
+                                                     bool englishUi) const {
     if (hwnd == nullptr) {
         return std::nullopt;
     }
@@ -99,20 +101,21 @@ std::optional<TrayCommand> TrayIcon::ShowContextMenu(HWND hwnd, bool autoStartCh
     }
 
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::ToggleWindow),
-                L"\u663E\u793A / \u9690\u85CF\u4E3B\u9762\u677F");
+                englishUi ? L"Show / Hide Launcher" : L"\u663E\u793A / \u9690\u85CF\u4E3B\u9762\u677F");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::OpenSettings),
-                L"\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D...");
+                englishUi ? L"Settings & Backup..." : L"\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D...");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::SyncCatalog),
-                L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939");
+                englishUi ? L"Sync Linked Folders" : L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::OpenDataDir),
-                L"\u6253\u5F00\u6570\u636E\u76EE\u5F55");
+                englishUi ? L"Open Data Folder" : L"\u6253\u5F00\u6570\u636E\u76EE\u5F55");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu,
                 MF_STRING | (autoStartChecked ? MF_CHECKED : MF_UNCHECKED),
                 static_cast<UINT_PTR>(TrayCommand::ToggleAutoStart),
-                L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
+                englishUi ? L"Run at Startup" : L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::Exit), L"\u9000\u51FA GeekDeskCpp");
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::Exit),
+                englishUi ? L"Exit GeekDeskCpp" : L"\u9000\u51FA GeekDeskCpp");
 
     POINT cursor{};
     GetCursorPos(&cursor);

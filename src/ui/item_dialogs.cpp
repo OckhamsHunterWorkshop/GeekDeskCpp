@@ -171,8 +171,10 @@ struct ItemDialogState {
     HWND tooltipEdit = nullptr;
     bool accepted = false;
     bool done = false;
+    bool englishUi = false;
 
-    ItemDialogState(bool dark, core::LaunchItem* ptr) : colors(dark), item(ptr) {}
+    ItemDialogState(bool dark, core::LaunchItem* ptr, bool en)
+        : colors(dark), item(ptr), englishUi(en) {}
     ~ItemDialogState() {
         if (font) {
             DeleteObject(font);
@@ -256,7 +258,8 @@ LRESULT CALLBACK ItemDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
         if (id == kIdItemBrowseFile) {
-            if (auto chosen = platform::PickFileDialog(hwnd, L"\u9009\u62E9\u5E94\u7528\u6216\u6587\u4EF6");
+            if (auto chosen = platform::PickFileDialog(
+                    hwnd, st->englishUi ? L"Choose App or File" : L"\u9009\u62E9\u5E94\u7528\u6216\u6587\u4EF6");
                 chosen.has_value()) {
                 const std::string extLower =
                     core::utf8::ToLowerAscii(core::utf8::PathToUtf8(chosen->extension()));
@@ -291,7 +294,8 @@ LRESULT CALLBACK ItemDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             return 0;
         }
         if (id == kIdItemBrowseDir) {
-            if (auto dir = platform::PickFolderDialog(hwnd, L"\u9009\u62E9\u76EE\u6807\u6587\u4EF6\u5939");
+            if (auto dir = platform::PickFolderDialog(
+                    hwnd, st->englishUi ? L"Choose Target Folder" : L"\u9009\u62E9\u76EE\u6807\u6587\u4EF6\u5939");
                 dir.has_value()) {
                 SetWindowTextW(st->targetEdit, dir->c_str());
                 SendMessageW(st->kindCombo, CB_SETCURSEL, 1, 0);
@@ -308,8 +312,10 @@ LRESULT CALLBACK ItemDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
             const auto trimTarget = core::utf8::TrimAscii(targetUtf8);
             if (trimName.empty() || trimTarget.empty()) {
                 MessageBoxW(hwnd,
-                            L"\u540D\u79F0\u548C\u76EE\u6807\u8DEF\u5F84 / \u7F51\u5740\u4E0D\u80FD\u4E3A\u7A7A\u3002",
-                            L"\u63D0\u793A", MB_OK | MB_ICONWARNING);
+                            st->englishUi
+                                ? L"Name and Target Path / URL cannot be empty."
+                                : L"\u540D\u79F0\u548C\u76EE\u6807\u8DEF\u5F84 / \u7F51\u5740\u4E0D\u80FD\u4E3A\u7A7A\u3002",
+                            st->englishUi ? L"Notice" : L"\u63D0\u793A", MB_OK | MB_ICONWARNING);
                 return 0;
             }
 
@@ -387,7 +393,8 @@ std::optional<std::string> ShowTextInputDialog(HWND owner,
                                                bool isDark,
                                                std::wstring_view title,
                                                std::wstring_view promptLabel,
-                                               std::string_view initialUtf8) {
+                                               std::string_view initialUtf8,
+                                               bool englishUi) {
     const HINSTANCE hInst = GetModuleHandleW(nullptr);
     constexpr const wchar_t* kCls = L"GeekDeskCppTextInputDlg";
     WNDCLASSEXW wc{};
@@ -437,11 +444,12 @@ std::optional<std::string> ShowTextInputDialog(HWND owner,
     const int btnW = Scale(86, dpi);
     const int btnH = Scale(30, dpi);
     const int btnY = rc.bottom - pad - btnH;
-    CreateWindowExW(0, L"BUTTON", L"\u786E\u5B9A",
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"OK" : L"\u786E\u5B9A",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                     cw - pad - btnW * 2 - Scale(10, dpi), btnY, btnW, btnH, dlg,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDOK)), hInst, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"\u53D6\u6D88", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"Cancel" : L"\u53D6\u6D88",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                     cw - pad - btnW, btnY, btnW, btnH, dlg,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDCANCEL)), hInst, nullptr);
 
@@ -485,7 +493,8 @@ std::optional<std::string> ShowTextInputDialog(HWND owner,
 bool ShowItemEditDialog(HWND owner,
                         bool isDark,
                         std::wstring_view title,
-                        core::LaunchItem& inOutItem) {
+                        core::LaunchItem& inOutItem,
+                        bool englishUi) {
     const HINSTANCE hInst = GetModuleHandleW(nullptr);
     constexpr const wchar_t* kCls = L"GeekDeskCppItemEditDlg";
     WNDCLASSEXW wc{};
@@ -502,7 +511,7 @@ bool ShowItemEditDialog(HWND owner,
     const int winH = Scale(395, dpi);
     const auto pos = core::ComputeCenteredPosition(winW, winH, metrics.workArea);
 
-    ItemDialogState state(isDark, &inOutItem);
+    ItemDialogState state(isDark, &inOutItem, englishUi);
     state.font = CreateUiFont(dpi, 10);
 
     std::wstring titleW(title);
@@ -532,50 +541,56 @@ bool ShowItemEditDialog(HWND owner,
                         Scale(20, dpi), dlg, nullptr, hInst, nullptr);
     };
 
-    addLabel(L"\u663E\u793A\u540D\u79F0:", y);
+    addLabel(englishUi ? L"Name:" : L"\u663E\u793A\u540D\u79F0:", y);
     state.nameEdit = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT", core::utf8::Utf8ToWide(inOutItem.name).c_str(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, ctrlX, y, ctrlW, rowH, dlg,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemName)), hInst, nullptr);
     y += rowH + gap;
 
-    addLabel(L"\u6761\u76EE\u7C7B\u578B:", y);
+    addLabel(englishUi ? L"Type:" : L"\u6761\u76EE\u7C7B\u578B:", y);
     state.kindCombo = CreateWindowExW(
         0, L"COMBOBOX", nullptr, WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, ctrlX, y,
         Scale(160, dpi), Scale(160, dpi), dlg,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemKind)), hInst, nullptr);
-    SendMessageW(state.kindCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6587\u4EF6 / \u5E94\u7528 (File)"));
-    SendMessageW(state.kindCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u6587\u4EF6\u5939 (Folder)"));
-    SendMessageW(state.kindCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u7F51\u5740 (Url)"));
-    SendMessageW(state.kindCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"\u7CFB\u7EDF\u9879 (System)"));
+    SendMessageW(state.kindCombo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(englishUi ? L"File / App" : L"\u6587\u4EF6 / \u5E94\u7528 (File)"));
+    SendMessageW(state.kindCombo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(englishUi ? L"Folder" : L"\u6587\u4EF6\u5939 (Folder)"));
+    SendMessageW(state.kindCombo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(englishUi ? L"URL" : L"\u7F51\u5740 (Url)"));
+    SendMessageW(state.kindCombo, CB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(englishUi ? L"System Item" : L"\u7CFB\u7EDF\u9879 (System)"));
     SendMessageW(state.kindCombo, CB_SETCURSEL, KindToComboIndex(inOutItem.kind), 0);
     y += rowH + gap;
 
-    addLabel(L"\u76EE\u6807\u8DEF\u5F84:", y);
+    addLabel(englishUi ? L"Target:" : L"\u76EE\u6807\u8DEF\u5F84:", y);
     const int browseBtnW = Scale(58, dpi);
     const int targetW = ctrlW - browseBtnW * 2 - Scale(8, dpi);
     state.targetEdit = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT", core::utf8::Utf8ToWide(inOutItem.targetPath).c_str(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, ctrlX, y, targetW, rowH, dlg,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemTarget)), hInst, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"\u6587\u4EF6...", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"File..." : L"\u6587\u4EF6...",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                     ctrlX + targetW + Scale(4, dpi), y, browseBtnW, rowH, dlg,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemBrowseFile)), hInst,
                     nullptr);
-    CreateWindowExW(0, L"BUTTON", L"\u76EE\u5F55...", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"Dir..." : L"\u76EE\u5F55...",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                     ctrlX + targetW + browseBtnW + Scale(8, dpi), y, browseBtnW, rowH, dlg,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemBrowseDir)), hInst,
                     nullptr);
     y += rowH + gap;
 
-    addLabel(L"\u542F\u52A8\u53C2\u6570:", y);
+    addLabel(englishUi ? L"Arguments:" : L"\u542F\u52A8\u53C2\u6570:", y);
     state.argsEdit = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT", core::utf8::Utf8ToWide(inOutItem.arguments).c_str(),
         WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, ctrlX, y, ctrlW, rowH, dlg,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemArgs)), hInst, nullptr);
     y += rowH + gap;
 
-    addLabel(L"\u5DE5\u4F5C\u76EE\u5F55:", y);
+    addLabel(englishUi ? L"Work Dir:" : L"\u5DE5\u4F5C\u76EE\u5F55:", y);
     state.workDirEdit = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT",
         inOutItem.workingDirectory.has_value()
@@ -585,7 +600,7 @@ bool ShowItemEditDialog(HWND owner,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemWorkDir)), hInst, nullptr);
     y += rowH + gap;
 
-    addLabel(L"\u5907\u6CE8\u63D0\u793A:", y);
+    addLabel(englishUi ? L"Notes:" : L"\u5907\u6CE8\u63D0\u793A:", y);
     state.tooltipEdit = CreateWindowExW(
         WS_EX_CLIENTEDGE, L"EDIT",
         inOutItem.tooltip.has_value() ? core::utf8::Utf8ToWide(*inOutItem.tooltip).c_str() : L"",
@@ -601,7 +616,9 @@ bool ShowItemEditDialog(HWND owner,
         cbSize, cbSize, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemAdmin)), hInst,
         nullptr);
     CreateWindowExW(
-        0, L"STATIC", L"\u9ED8\u8BA4\u4EE5\u7BA1\u7406\u5458\u6743\u9650\u8FD0\u884C (runAsAdmin)",
+        0, L"STATIC",
+        englishUi ? L"Always run as administrator (runAsAdmin)"
+                  : L"\u9ED8\u8BA4\u4EE5\u7BA1\u7406\u5458\u6743\u9650\u8FD0\u884C (runAsAdmin)",
         WS_CHILD | WS_VISIBLE | SS_NOTIFY | SS_CENTERIMAGE, ctrlX + cbSize + Scale(6, dpi), y,
         ctrlW - cbSize - Scale(6, dpi), cbH, dlg,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemAdmin + 1000)), hInst, nullptr);
@@ -611,11 +628,12 @@ bool ShowItemEditDialog(HWND owner,
     const int btnW = Scale(90, dpi);
     const int btnH = Scale(30, dpi);
     const int btnY = rc.bottom - pad - btnH;
-    CreateWindowExW(0, L"BUTTON", L"\u4FDD\u5B58",
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"Save" : L"\u4FDD\u5B58",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
                     cw - pad - btnW * 2 - Scale(10, dpi), btnY, btnW, btnH, dlg,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDOK)), hInst, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"\u53D6\u6D88", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"Cancel" : L"\u53D6\u6D88",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP,
                     cw - pad - btnW, btnY, btnW, btnH, dlg,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDCANCEL)), hInst, nullptr);
 

@@ -126,6 +126,7 @@ private:
     void ScheduleSaveCatalog();
     void ResetDefaultStatus();
     void RefreshHooksAndTray();
+    void UpdateHeaderTooltip(HeaderButton btn);
     bool FindCatalogIndices(const core::LaunchItem* ptr,
                             std::size_t& outGroupIdx,
                             std::size_t& outItemIdx) const noexcept;
@@ -160,6 +161,7 @@ private:
     std::vector<DisplayedItemView> displayedItems_;
 
     HWND hwnd_ = nullptr;
+    HWND headerTooltip_ = nullptr;
     std::uint32_t dpi_ = 96;
     bool nativeBackdropActive_ = false;
     bool hooksRegistered_ = false;

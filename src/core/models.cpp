@@ -193,6 +193,28 @@ std::optional<DockEdge> ParseDockEdge(std::string_view text) {
                                      });
 }
 
+std::string_view ToString(UiLanguage value) {
+    switch (value) {
+    case UiLanguage::Auto:
+        return "Auto";
+    case UiLanguage::ZhCn:
+        return "ZhCn";
+    case UiLanguage::EnUs:
+        return "EnUs";
+    }
+    return "Auto";
+}
+
+std::optional<UiLanguage> ParseUiLanguage(std::string_view text) {
+    return MatchEnum<UiLanguage>(text, {
+                                           {"Auto", UiLanguage::Auto},
+                                           {"ZhCn", UiLanguage::ZhCn},
+                                           {"zh-CN", UiLanguage::ZhCn},
+                                           {"EnUs", UiLanguage::EnUs},
+                                           {"en-US", UiLanguage::EnUs},
+                                       });
+}
+
 AppSettings AppSettings::CreateDefault() {
     return AppSettings{};
 }

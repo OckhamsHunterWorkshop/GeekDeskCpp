@@ -59,6 +59,12 @@ enum class DockEdge {
     Right = 3,
 };
 
+enum class UiLanguage {
+    Auto = 0,
+    ZhCn = 1,
+    EnUs = 2,
+};
+
 [[nodiscard]] std::string_view ToString(HidePolicy value);
 [[nodiscard]] std::optional<HidePolicy> ParseHidePolicy(std::string_view text);
 
@@ -82,6 +88,9 @@ enum class DockEdge {
 
 [[nodiscard]] std::string_view ToString(DockEdge value);
 [[nodiscard]] std::optional<DockEdge> ParseDockEdge(std::string_view text);
+
+[[nodiscard]] std::string_view ToString(UiLanguage value);
+[[nodiscard]] std::optional<UiLanguage> ParseUiLanguage(std::string_view text);
 
 struct WindowSettings {
     double width = 820.0;
@@ -125,6 +134,7 @@ struct AppearanceSettings {
     bool showItemTitle = true;
     int fontSize = 12;
     std::string fontFamily = "Microsoft YaHei UI";
+    UiLanguage language = UiLanguage::Auto;
     std::string textColor = "#FFFFFF";
 };
 

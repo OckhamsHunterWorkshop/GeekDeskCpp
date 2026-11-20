@@ -143,6 +143,7 @@ void WriteSettingsObject(yyjson_mut_doc* doc,
     yyjson_mut_obj_add_bool(doc, app, "showItemTitle", settings.appearance.showItemTitle);
     yyjson_mut_obj_add_int(doc, app, "fontSize", settings.appearance.fontSize);
     AddStr(doc, app, "fontFamily", settings.appearance.fontFamily);
+    AddStr(doc, app, "language", core::ToString(settings.appearance.language));
     AddStr(doc, app, "textColor", settings.appearance.textColor);
     yyjson_mut_obj_add_val(doc, root, "appearance", app);
 
@@ -224,6 +225,7 @@ bool ParseSettingsObject(yyjson_val* root,
         if (core::utf8::TrimAscii(out.appearance.fontFamily).empty()) {
             out.appearance.fontFamily = "Microsoft YaHei UI";
         }
+        ReadEnum(app, "language", out.appearance.language, core::ParseUiLanguage, warnings);
         ReadString(app, "textColor", out.appearance.textColor);
     }
 

@@ -38,7 +38,9 @@ public:
     }
 
     /// Show native context menu at cursor position; returns selected command if clicked.
-    [[nodiscard]] std::optional<TrayCommand> ShowContextMenu(HWND hwnd, bool autoStartChecked) const;
+    [[nodiscard]] std::optional<TrayCommand> ShowContextMenu(HWND hwnd,
+                                                             bool autoStartChecked,
+                                                             bool englishUi = false) const;
 
 private:
     HWND hwnd_ = nullptr;

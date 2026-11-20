@@ -52,6 +52,7 @@ private:
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
     void BuildControls();
+    void RebuildLanguageUi();
     void SwitchTab(int tabIndex);
     void PopulateFromSettings();
     void RefreshBackupListAndStats();
@@ -68,6 +69,7 @@ private:
         kIdTab2,
         kIdCloseBtn,
         // Appearance
+        kIdLanguageCombo,
         kIdThemeCombo,
         kIdBackdropCombo,
         kIdBgOpacitySlider,
@@ -134,6 +136,7 @@ private:
     std::vector<std::filesystem::path> snapshotPaths_;
 
     // Direct control handles for quick access
+    HWND languageCombo_ = nullptr;
     HWND themeCombo_ = nullptr;
     HWND backdropCombo_ = nullptr;
     HWND bgOpacitySlider_ = nullptr;
