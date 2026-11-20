@@ -68,12 +68,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps
 
 ---
 
-## 文档导航
-
-| 文档 | 内容说明 |
-| :--- | :--- |
-| [`AGENTS.md`](./AGENTS.md) | 仓库架构红线、目录职责与验证规范 |
-| [`docs/01-prd-and-scope.md`](./docs/01-prd-and-scope.md) | 产品背景、范围边界与资源预算 |
-| [`docs/02-architecture-and-design.md`](./docs/02-architecture-and-design.md) | 4 层架构、线程模型、Mode A 渲染管线与内存控制策略 |
-| [`docs/03-implementation-plan.md`](./docs/03-implementation-plan.md) | Phase 1~4 实施计划与 Win32/D2D 关键经验 |
-| [`docs/04-data-and-backup-spec.md`](./docs/04-data-and-backup-spec.md) | JSON Schema v1 字段契约、原子写、自动恢复与 `.gdbackup` 备份规范 |
+## 灵感致敬 BookerLiu/GeekDesk
