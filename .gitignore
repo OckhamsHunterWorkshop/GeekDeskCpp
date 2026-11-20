@@ -1,0 +1,29 @@
+# Build artifacts
+build/
+out/
+.vs/
+.vscode/
+.cache/
+CMakeUserPresets.json
+
+# Binaries and intermediates
+*.exe
+*.dll
+*.lib
+*.a
+*.o
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.res
+*.user
+*.suo
+*.tmp
+
+# Runtime / test data
+data/
+logs/
+backups/
+cache/
+*.log
