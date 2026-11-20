@@ -151,7 +151,7 @@ void SettingsWindow::OpenOrActivate(HINSTANCE hInstance,
 
     hwnd_ = CreateWindowExW(0, kSettingsClassName,
                             L"GeekDeskCpp \u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D\u4E2D\u5FC3",
-                            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE, pos.x, pos.y,
+                            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, pos.x, pos.y,
                             winW, winH, ownerHwnd, nullptr, hInstance, this);
     if (hwnd_ == nullptr) {
         return;
@@ -162,6 +162,8 @@ void SettingsWindow::OpenOrActivate(HINSTANCE hInstance,
     PopulateFromSettings();
     RefreshBackupListAndStats();
     SwitchTab(activeTab_);
+    ShowWindow(hwnd_, SW_SHOW);
+    SetForegroundWindow(hwnd_);
     InvalidateRect(hwnd_, nullptr, TRUE);
 }
 
@@ -179,6 +181,8 @@ void SettingsWindow::RebuildThemeBrushes() {
     if (hwnd_ != nullptr) {
         const BOOL darkFlag = isDark_ ? TRUE : FALSE;
         DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkFlag, sizeof(darkFlag));
+        SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     }
     if (bgBrush_ != nullptr) {
         DeleteObject(bgBrush_);
