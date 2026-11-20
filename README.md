@@ -74,3 +74,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps
 | [`docs/02-architecture-and-design.md`](./docs/02-architecture-and-design.md) | 4 层架构、线程模型、Mode A 渲染管线与内存控制策略 |
 | [`docs/03-implementation-plan.md`](./docs/03-implementation-plan.md) | Phase 1~4 实施计划与 Win32/D2D 关键经验 |
 | [`docs/04-data-and-backup-spec.md`](./docs/04-data-and-backup-spec.md) | JSON Schema v1 字段契约、原子写、自动恢复与 `.gdbackup` 备份规范 |
+
+---
+
+## 致敬 / Acknowledgements
+
+本项目的设计灵感致敬开源项目 [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk)（基于 C++20 + Win32 + Direct2D 从零重写，聚焦极简与低内存占用）。
+
