@@ -369,8 +369,25 @@ void MainWindow::ShowAndPosition() {
     const auto metrics = platform::GetMonitorMetricsForPoint(cursorPt);
     dpi_ = metrics.dpi;
 
-    const int widthPx = std::max(320, core::DipToPhysicalPx(settings_.window.width, dpi_));
-    const int heightPx = std::max(240, core::DipToPhysicalPx(settings_.window.height, dpi_));
+    double targetWidthDip = settings_.window.width;
+    if (preferredColumns_ > 0) {
+        const double sidebarW = std::clamp(settings_.window.sidebarWidth, 120.0, 260.0);
+        const double tileW =
+            static_cast<double>(std::clamp(settings_.appearance.iconSize, 28, 96)) + 40.0;
+        const double chromeW = sidebarW + 56.0;
+        const int curCols = core::ComputeGridColumns(
+            static_cast<int>(std::floor(std::max(80.0, targetWidthDip - chromeW))),
+            static_cast<int>(tileW), 10, 1);
+        if (curCols != preferredColumns_) {
+            targetWidthDip = chromeW + static_cast<double>(preferredColumns_) * tileW +
+                             static_cast<double>(std::max(0, preferredColumns_ - 1)) * 10.0 + 8.0;
+        }
+    }
+
+    const int maxWorkW = std::max(480, static_cast<int>(metrics.workArea.right - metrics.workArea.left) - 16);
+    const int maxWorkH = std::max(320, static_cast<int>(metrics.workArea.bottom - metrics.workArea.top) - 16);
+    const int widthPx = std::clamp(core::DipToPhysicalPx(targetWidthDip, dpi_), 320, maxWorkW);
+    const int heightPx = std::clamp(core::DipToPhysicalPx(settings_.window.height, dpi_), 240, maxWorkH);
 
     const core::PixelPoint pos =
         settings_.window.followMouse
@@ -380,11 +397,16 @@ void MainWindow::ShowAndPosition() {
 
     const HWND zOrder = settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST;
     suppressSizePersist_ = true;
+    suppressDpiResize_ = true;
     SetWindowPos(hwnd_, zOrder, pos.x, pos.y, widthPx, heightPx, SWP_NOACTIVATE);
+    suppressDpiResize_ = false;
     suppressSizePersist_ = false;
 
     ApplyBackdropAndPalette();
     (void)PresentLayeredFrame();
+    if (preferredColumns_ <= 0 && layout_.gridColumns > 0) {
+        preferredColumns_ = layout_.gridColumns;
+    }
     ShowWindow(hwnd_, SW_SHOW);
     lastShownTickMs_ = GetTickCount64();
     ForceWindowForeground(hwnd_);
@@ -658,14 +680,14 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DPICHANGED: {
         dpi_ = LOWORD(wParam);
         const auto* suggested = reinterpret_cast<const RECT*>(lParam);
-        if (suggested != nullptr) {
+        if (!suppressDpiResize_ && suggested != nullptr) {
             suppressSizePersist_ = true;
             SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
                          suggested->right - suggested->left, suggested->bottom - suggested->top,
                          SWP_NOZORDER | SWP_NOACTIVATE);
             suppressSizePersist_ = false;
         }
-        if (IsWindowVisible(hwnd_)) {
+        if (!suppressDpiResize_ && IsWindowVisible(hwnd_)) {
             (void)PresentLayeredFrame();
         }
         return 0;
@@ -914,7 +936,9 @@ void MainWindow::OnResizeOrDpiChanged() {
         ScheduleSaveSettings();
     }
     if (IsWindowVisible(hwnd_)) {
-        (void)PresentLayeredFrame();
+        if (PresentLayeredFrame() && layout_.gridColumns > 0) {
+            preferredColumns_ = layout_.gridColumns;
+        }
     }
 }
 

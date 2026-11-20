@@ -169,8 +169,10 @@ private:
     bool inTrayMenu_ = false;
     int modalDepth_ = 0;
     bool suppressSizePersist_ = false;
+    bool suppressDpiResize_ = false;
     bool suppressDiskPersist_ = false;
     bool renderPending_ = false;
+    int preferredColumns_ = 0;
 
     std::size_t activeGroupIndex_ = 0;
     std::wstring searchQueryWide_;
