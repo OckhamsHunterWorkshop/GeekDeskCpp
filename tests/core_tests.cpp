@@ -671,3 +671,66 @@ TEST_CASE("folder watcher detects real-time directory additions with debouncing 
         CHECK(events.size() <= 2);
     }
 }
+
+TEST_CASE("backup recovery cascades past a corrupted newest snapshot to an older valid daily backup") {
+    TempDirGuard dir("cascade_recovery");
+    const std::filesystem::path dataRoot = dir.path / L"data";
+    std::string err;
+    REQUIRE(BackupManager::EnsureDataLayout(dataRoot, err));
+
+    AppSettings sValid = AppSettings::CreateDefault();
+    sValid.window.width = 960.0;
+    CatalogDocument cValid = CatalogDocument::CreateDefault();
+    cValid.groups[0].name = "RecoveredGroup";
+
+    // Older valid daily backups
+    REQUIRE(WriteFileAtomic(dataRoot / L"backups" / L"settings-2026-11-18.json",
+                            SerializeSettings(sValid))
+                .ok);
+    REQUIRE(WriteFileAtomic(dataRoot / L"backups" / L"catalog-2026-11-18.json",
+                            SerializeCatalog(cValid))
+                .ok);
+
+    // Newer corrupted daily backups + corrupted primary files
+    REQUIRE(WriteFileAtomic(dataRoot / L"backups" / L"settings-2026-11-19.json",
+                            "{ corrupted daily settings")
+                .ok);
+    REQUIRE(WriteFileAtomic(dataRoot / L"backups" / L"catalog-2026-11-19.json",
+                            "{\"schemaVersion\": 999}")
+                .ok);
+    REQUIRE(WriteFileAtomic(dataRoot / L"settings.json", "invalid json").ok);
+    REQUIRE(WriteFileAtomic(dataRoot / L"catalog.json", "invalid json").ok);
+
+    const auto sRec = BackupManager::LoadSettingsWithRecovery(dataRoot);
+    REQUIRE(sRec.ok);
+    CHECK(sRec.recoveredFromBackup);
+    CHECK(sRec.value.window.width == doctest::Approx(960.0));
+    CHECK(std::filesystem::exists(sRec.quarantinedCorruptPath));
+
+    const auto cRec = BackupManager::LoadCatalogWithRecovery(dataRoot);
+    REQUIRE(cRec.ok);
+    CHECK(cRec.recoveredFromBackup);
+    REQUIRE(cRec.value.groups.size() == 1);
+    CHECK(cRec.value.groups[0].name == "RecoveredGroup");
+    CHECK(std::filesystem::exists(cRec.quarantinedCorruptPath));
+}
+
+TEST_CASE("folder watcher survives rapid Start/Stop restarts without deadlock") {
+    TempDirGuard watchDir("watcher_restart");
+    geekdesk::platform::FolderWatcher watcher;
+
+    std::atomic<int> hits{0};
+    for (int i = 0; i < 10; ++i) {
+        watcher.Start({{"g-rapid", watchDir.path}},
+                      [&](const std::string&) { hits.fetch_add(1, std::memory_order_relaxed); },
+                      std::chrono::milliseconds(40));
+        if (i == 9) {
+            REQUIRE(WriteFileAtomic(watchDir.path / L"final.txt", "ok").ok);
+            for (int waitMs = 0; waitMs < 2000 && hits.load() == 0; waitMs += 20) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+        }
+    }
+    watcher.Stop();
+    CHECK(hits.load() >= 1);
+}

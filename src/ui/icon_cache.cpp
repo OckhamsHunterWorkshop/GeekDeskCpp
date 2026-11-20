@@ -184,7 +184,7 @@ bool ExtractViaShellImageFactory(IWICImagingFactory* factory,
         return false;
     }
     HBITMAP hBitmap = nullptr;
-    if (FAILED(imageFactory->GetImage(SIZE{128, 128}, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK,
+    if (FAILED(imageFactory->GetImage(SIZE{96, 96}, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK,
                                       &hBitmap)) ||
         hBitmap == nullptr) {
         return false;
@@ -373,6 +373,12 @@ void IconCache::ClearMemoryCache() {
     lruList_.clear();
 }
 
+void IconCache::WaitUntilIdle(int timeoutMs) const {
+    std::unique_lock<std::mutex> lock(const_cast<std::mutex&>(mutex_));
+    idleCv_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
+                     [this]() { return !initialized_ || stopRequested_ || (queue_.empty() && !workerBusy_); });
+}
+
 std::string IconCache::BuildMemoryKey(const core::LaunchItem& item) {
     if (item.customIconFile.has_value() && !item.customIconFile->empty()) {
         const std::string file =
@@ -495,6 +501,7 @@ void IconCache::WorkerLoop() {
             if (stopRequested_) {
                 break;
             }
+            workerBusy_ = true;
             // LIFO ordering ensures newly selected groups render first.
             req = std::move(queue_.back());
             queue_.pop_back();
@@ -512,18 +519,20 @@ void IconCache::WorkerLoop() {
 
         HWND notifyHwnd = nullptr;
         UINT notifyMsg = 0;
-        bool queueNowEmpty = false;
+        bool isNowIdle = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             inFlight_.erase(req.memoryKey);
             notifyHwnd = notifyHwnd_;
             notifyMsg = notifyMsg_;
-            queueNowEmpty = queue_.empty();
+            workerBusy_ = false;
+            isNowIdle = queue_.empty();
+        }
+        if (isNowIdle) {
+            idleCv_.notify_all();
         }
 
         if (ok && notifyHwnd != nullptr && notifyMsg != 0) {
-            // Post notification as items finish so visible grid fills progressively.
-            (void)queueNowEmpty;
             PostMessageW(notifyHwnd, notifyMsg, 0, 0);
         }
     }

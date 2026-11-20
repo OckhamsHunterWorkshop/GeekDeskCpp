@@ -108,7 +108,6 @@ bool D2DRenderer::Initialize() {
 void D2DRenderer::Shutdown() {
     DiscardTargetAndBitmaps();
     ReleaseBackBuffer();
-    ellipsisTrim_.Reset();
     emptyFmt_.Reset();
     statusFmt_.Reset();
     badgeFmt_.Reset();
@@ -152,14 +151,13 @@ bool D2DRenderer::EnsureFactories() {
         out->SetParagraphAlignment(vAlign);
         out->SetWordWrapping(wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
         if (ellipsis) {
-            if (!ellipsisTrim_) {
-                dwriteFactory_->CreateEllipsisTrimmingSign(
-                    out.Get(), ellipsisTrim_.ReleaseAndGetAddressOf());
-            }
-            if (ellipsisTrim_) {
+            platform::ComPtr<IDWriteInlineObject> localTrim;
+            if (SUCCEEDED(dwriteFactory_->CreateEllipsisTrimmingSign(
+                    out.Get(), localTrim.ReleaseAndGetAddressOf())) &&
+                localTrim) {
                 DWRITE_TRIMMING trim{};
                 trim.granularity = DWRITE_TRIMMING_GRANULARITY_CHARACTER;
-                out->SetTrimming(&trim, ellipsisTrim_.Get());
+                out->SetTrimming(&trim, localTrim.Get());
             }
         }
         return true;
@@ -755,11 +753,8 @@ bool D2DRenderer::Render(HDC targetPaintDc,
             const bool isHovered = (static_cast<int>(i) == state.hoveredTileIdx);
             const bool isDragSrc = (static_cast<int>(i) == state.draggingTileIdx);
             if (isSelected || isHovered || isDragSrc) {
-                solidBrush_->SetColor(
-                    ToD2D(isSelected ? pal.tileSelectedBg
-                                     : ToD2D(pal.tileHoverBg, isDragSrc ? 0.5f : 1.0f).a > 0.0f
-                                           ? pal.tileHoverBg
-                                           : pal.tileHoverBg));
+                const ColorRgba fill = isSelected ? pal.tileSelectedBg : pal.tileHoverBg;
+                solidBrush_->SetColor(ToD2D(fill, isDragSrc ? 0.55f : 1.0f));
                 dcTarget_->FillRoundedRectangle(ToRounded(tile, 8.0f, 8.0f), solidBrush_.Get());
                 if (isSelected) {
                     solidBrush_->SetColor(ToD2D(pal.accent, 0.7f));

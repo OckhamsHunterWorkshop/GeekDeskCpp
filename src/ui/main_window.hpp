@@ -25,6 +25,21 @@
 
 namespace geekdesk::ui {
 
+struct SoakReport {
+    bool ok = false;
+    int cycles = 0;
+    std::uint32_t gdiStart = 0;
+    std::uint32_t gdiEnd = 0;
+    std::uint32_t userStart = 0;
+    std::uint32_t userEnd = 0;
+    std::uint32_t handlesStart = 0;
+    std::uint32_t handlesEnd = 0;
+    SIZE_T workingSetStart = 0;
+    SIZE_T workingSetEnd = 0;
+    SIZE_T privateStart = 0;
+    SIZE_T privateEnd = 0;
+};
+
 class MainWindow {
 public:
     MainWindow(std::filesystem::path dataRoot,
@@ -48,6 +63,9 @@ public:
 
     /// Trigger one synchronous render cycle (used by --smoke-ui verification).
     bool RenderSmokeFrame();
+
+    /// Run an automated UI/D2D/Settings soak stability stress pass and capture resource deltas.
+    [[nodiscard]] SoakReport RunSoakCycles(int cycles);
 
     void Destroy();
 
@@ -150,6 +168,7 @@ private:
     bool inTrayMenu_ = false;
     int modalDepth_ = 0;
     bool suppressSizePersist_ = false;
+    bool suppressDiskPersist_ = false;
 
     std::size_t activeGroupIndex_ = 0;
     std::wstring searchQueryWide_;

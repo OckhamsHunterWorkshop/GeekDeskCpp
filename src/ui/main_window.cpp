@@ -17,8 +17,12 @@
 #include "ui/context_menus.hpp"
 #include "ui/item_dialogs.hpp"
 
+#ifndef PSAPI_VERSION
+#define PSAPI_VERSION 2
+#endif
 #include <imm.h>
 #include <ole2.h>
+#include <psapi.h>
 #include <windowsx.h>
 #include <wtsapi32.h>
 
@@ -383,6 +387,120 @@ bool MainWindow::RenderSmokeFrame() {
     const bool updated = (UpdateWindow(hwnd_) != FALSE);
     HideWindow();
     return updated;
+}
+
+SoakReport MainWindow::RunSoakCycles(int cycles) {
+    SoakReport report;
+    report.cycles = cycles;
+    if (hwnd_ == nullptr || cycles <= 0) {
+        return report;
+    }
+
+    const core::AppSettings savedSettings = settings_;
+    const std::size_t savedGroupIdx = activeGroupIndex_;
+    const std::wstring savedQuery = searchQueryWide_;
+
+    auto pumpWindowQueue = []() {
+        MSG msg{};
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    };
+
+    auto captureResources = [](std::uint32_t& outGdi, std::uint32_t& outUser,
+                               std::uint32_t& outHandles, SIZE_T& outWs, SIZE_T& outPriv) {
+        HANDLE self = GetCurrentProcess();
+        outGdi = GetGuiResources(self, GR_GDIOBJECTS);
+        outUser = GetGuiResources(self, GR_USEROBJECTS);
+        DWORD hCount = 0;
+        GetProcessHandleCount(self, &hCount);
+        outHandles = static_cast<std::uint32_t>(hCount);
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb = sizeof(pmc);
+        GetProcessMemoryInfo(self, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+        outWs = pmc.WorkingSetSize;
+        outPriv = pmc.PrivateUsage;
+    };
+
+    suppressDiskPersist_ = true;
+
+    const core::BackdropMode kModes[] = {
+        core::BackdropMode::Acrylic,
+        core::BackdropMode::Mica,
+        core::BackdropMode::MicaAlt,
+        core::BackdropMode::Gradient,
+    };
+
+    auto runStep = [&](int i) {
+        ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        UpdateWindow(hwnd_);
+
+        if (!catalog_.groups.empty()) {
+            const std::size_t nextGrp = static_cast<std::size_t>(i) % catalog_.groups.size();
+            SelectGroup(nextGrp, false);
+        }
+        (void)searchEngine_.Search("a", 24);
+
+        if ((i % 4) == 0) {
+            core::AppSettings next = settings_;
+            next.appearance.backdrop = kModes[(i / 4) % 4];
+            next.appearance.backgroundOpacity = 0.25 + 0.15 * static_cast<double>((i / 4) % 5);
+            next.appearance.cardOpacity = 0.10 + 0.15 * static_cast<double>((i / 4) % 4);
+            ApplySettingsLive(next);
+            UpdateWindow(hwnd_);
+        }
+
+        if ((i % 25) == 0) {
+            RefreshHooksAndTray();
+            OpenSettingsWindow();
+            pumpWindowQueue();
+            settingsWindow_.Close();
+            pumpWindowQueue();
+        }
+
+        HideWindow();
+        pumpWindowQueue();
+    };
+
+    // Warmup cycles (including visiting every group & opening Settings twice) to finish lazy OS
+    // Shell/DirectWrite/Common-Controls allocations before capturing steady-state baseline.
+    const int warmupCount = std::max(12, static_cast<int>(catalog_.groups.size()) + 2);
+    for (int w = 0; w < warmupCount; ++w) {
+        runStep(w);
+    }
+    OpenSettingsWindow();
+    pumpWindowQueue();
+    settingsWindow_.Close();
+    pumpWindowQueue();
+    iconCache_.WaitUntilIdle(5000);
+    // Paint once more after icons arrive so ID2D1Bitmap caches are populated cleanly at baseline.
+    for (std::size_t gi = 0; gi < catalog_.groups.size(); ++gi) {
+        SelectGroup(gi, false);
+        ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+        UpdateWindow(hwnd_);
+        HideWindow();
+    }
+    pumpWindowQueue();
+    captureResources(report.gdiStart, report.userStart, report.handlesStart,
+                     report.workingSetStart, report.privateStart);
+
+    for (int i = 0; i < cycles; ++i) {
+        runStep(i);
+    }
+
+    ApplySettingsLive(savedSettings);
+    activeGroupIndex_ = std::min(savedGroupIdx, catalog_.groups.size() - 1);
+    searchQueryWide_ = savedQuery;
+    RebuildDisplayedItems();
+    HideWindow();
+    pumpWindowQueue();
+
+    captureResources(report.gdiEnd, report.userEnd, report.handlesEnd, report.workingSetEnd,
+                     report.privateEnd);
+    suppressDiskPersist_ = false;
+    report.ok = true;
+    return report;
 }
 
 LRESULT CALLBACK MainWindow::StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -1728,11 +1846,17 @@ void MainWindow::EnsureTileVisible(std::size_t tileIndex) {
 }
 
 void MainWindow::ScheduleSaveSettings() {
+    if (suppressDiskPersist_) {
+        return;
+    }
     debouncedWriter_.Schedule(dataRoot_ / L"settings.json", storage::SerializeSettings(settings_),
                               std::chrono::milliseconds(300));
 }
 
 void MainWindow::ScheduleSaveCatalog() {
+    if (suppressDiskPersist_) {
+        return;
+    }
     debouncedWriter_.Schedule(dataRoot_ / L"catalog.json", storage::SerializeCatalog(catalog_),
                               std::chrono::milliseconds(300));
 }

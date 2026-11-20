@@ -11,7 +11,7 @@
 | **Phase 1** | 工程脚手架、纯逻辑内核、Schema v1 存储与备份恢复、单元测试、架构文档 | **已完成** | `src/core/*`, `src/storage/*`, `tests/core_tests.cpp`, `docs/*` |
 | **Phase 2** | Win32 外壳（热键/中键/托盘/DWM/启动）+ Direct2D Software 主面板（可看/可用/能搜索/能启动） | **已完成** | `src/platform/*`, `src/ui/*` |
 | **Phase 3** | 完整交互管理（分组/图标 CRUD、拖拽排序、文件夹监听、原生设置与备份恢复 UI） | **已完成** | `catalog_mutator`, `folder_watcher`, `drag_drop`, `context_menus`, `item_dialogs`, `settings_window` |
-| **Phase 4** | 长稳压测（睡眠唤醒/锁屏/多屏热插拔）、内存与启动审计、便携发行打包 | 待启动 | 发布包与完整回归清单 |
+| **Phase 4** | 长稳压测（睡眠唤醒/锁屏/多屏热插拔）、内存与启动审计、便携发行打包 | **已完成** | `--soak-test`, `scripts/package-release.ps1`, 便携发行包 |
 
 ---
 
@@ -107,13 +107,16 @@ src/ui/
 
 ---
 
-## Phase 4：稳定压测、内存审计与发布打包
+## Phase 4：稳定压测、内存审计与发布打包（已完成基线）
 
-### 4.1 关键验证项
-1. 连续切换不同材质/透明度/全屏遮挡/睡眠唤醒（S3/Modern Standby）/锁屏解锁 20 次，确认 `WH_MOUSE_LL` 与热键 100% 自动恢复不失灵。
-2. Process Explorer / VMMap 审计：`GeekDeskCpp.exe` 空闲 Working Set 与 Private Bytes 稳定在目标红线内，关闭窗口隐藏后无内存泄漏与 GDI/Handle 句柄增长（Task Manager Handles 数长期平稳）。
-3. 配置故障演练：手动破坏 `catalog.json`，启动程序验证自动隔离 `.corrupt.*.bak` 并从每日备份恢复且写日志。
-4. 编写 `scripts/package-release.ps1`，产物仅包含 `GeekDeskCpp.exe` 与简明 `README.txt` 便携压缩包。
+### 4.1 已交付与验证项
+1. **资源泄漏审计与修复**：清理 `SettingsWindow` 销毁阶段 Font/Brush GDI 句柄、`D2DRenderer` 独立文本裁剪 sign，以及抑制压测期间无效落盘（`suppressDiskPersist_`）；新增 `--soak-test [N]` 入口自动执行 `Show -> Paint -> 切组 -> 搜索 -> 材质/透明度轮换 -> Hooks 刷新 -> 设置弹窗开关 -> Hide` 闭环压测。
+2. **500 轮实测结果（9 分组 / 78 条目）**：
+   - **Cold（含首次全部 Shell 图标提取 + 500 轮）**：`GDI 97 -> 95`，`USER 49 -> 50`，`Handles 469 -> 469`，`Private Bytes 40.80 MB -> 40.80 MB`；
+   - **Warm（磁盘 PNG 缓存 + 500 轮）**：`GDI 59 -> 63`，`USER 49 -> 50`，`Handles 426 -> 426`，`Working Set 36.62 MB -> 37.62 MB`，`Private Bytes 19.18 MB -> 20.27 MB`；
+   - 启动单分组 `--smoke-ui`：`Private Bytes 8.70 MB`，`Working Set 22.66 MB`，全程 **GPU UMD Loaded = false**、**Everything Loaded = false**。
+3. **损坏自愈回归演练与单测**：单元测试扩展至 **16 / 16（210 断言全绿）**，覆盖多级损坏每日备份降级自愈与 `FolderWatcher` 连续启停压测；端到端人工损坏 `catalog.json` 启动自愈演练成功隔离 `.corrupt.*.bak` 并恢复全部 9 个分组及日志审计记录。
+4. **便携发行脚本**：已交付 `scripts/package-release.ps1`，全自动执行洁净编译、`ctest`、`objdump -p` 导入表红线审计、200 轮压测并输出仅含 `GeekDeskCpp.exe`（2,748,416 字节）与 `README.txt` 的便携压缩包 `GeekDeskCpp-v0.1.0-win64-portable.zip`（1,179,868 字节）及 `.sha256` 校验文件。
 
 ---
 

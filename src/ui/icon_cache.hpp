@@ -36,6 +36,7 @@ public:
 
     void SetDataRoot(std::filesystem::path dataRoot);
     void ClearMemoryCache();
+    void WaitUntilIdle(int timeoutMs = 2000) const;
 
     /// Build stable cache key for a LaunchItem.
     [[nodiscard]] static std::string BuildMemoryKey(const core::LaunchItem& item);
@@ -61,17 +62,19 @@ private:
         const std::filesystem::path& dataRoot,
         const core::LaunchItem& item);
 
-    static constexpr std::size_t kMaxMemoryEntries = 256;
+    static constexpr std::size_t kMaxMemoryEntries = 96;
     static constexpr std::size_t kMaxQueueCapacity = 512;
 
     HWND notifyHwnd_ = nullptr;
     UINT notifyMsg_ = 0;
 
-    mutable std::mutex mutex_;
+    std::mutex mutex_;
     std::condition_variable cv_;
+    mutable std::condition_variable idleCv_;
     std::filesystem::path dataRoot_;
     bool stopRequested_ = false;
     bool initialized_ = false;
+    bool workerBusy_ = false;
 
     std::deque<IconRequest> queue_;
     std::unordered_set<std::string> inFlight_;

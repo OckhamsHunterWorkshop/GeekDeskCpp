@@ -161,7 +161,6 @@ private:
     platform::ComPtr<IDWriteTextFormat> badgeFmt_;
     platform::ComPtr<IDWriteTextFormat> statusFmt_;
     platform::ComPtr<IDWriteTextFormat> emptyFmt_;
-    platform::ComPtr<IDWriteInlineObject> ellipsisTrim_;
 
     HDC memDc_ = nullptr;
     HBITMAP memBitmap_ = nullptr;
@@ -169,7 +168,7 @@ private:
     int backWidthPx_ = 0;
     int backHeightPx_ = 0;
 
-    static constexpr std::size_t kMaxBitmapEntries = 256;
+    static constexpr std::size_t kMaxBitmapEntries = 96;
     struct BitmapEntry {
         platform::ComPtr<ID2D1Bitmap> bitmap;
         std::list<std::string>::iterator lruIt;

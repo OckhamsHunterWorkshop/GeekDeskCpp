@@ -165,6 +165,49 @@ int RunVerifyData(const std::filesystem::path& dataDir, const ConsoleOutput& out
     return 0;
 }
 
+struct ModuleAuditResult {
+    bool warpLoaded = false;
+    bool gpuUmdLoaded = false;
+    bool everythingLoaded = false;
+};
+
+ModuleAuditResult AuditLoadedModules() {
+    ModuleAuditResult res;
+    std::vector<HMODULE> modules(256);
+    DWORD bytesNeeded = 0;
+    if (!EnumProcessModules(GetCurrentProcess(), modules.data(),
+                            static_cast<DWORD>(modules.size() * sizeof(HMODULE)), &bytesNeeded)) {
+        return res;
+    }
+    const std::size_t count =
+        std::min<std::size_t>(modules.size(), bytesNeeded / sizeof(HMODULE));
+    for (std::size_t idx = 0; idx < count; ++idx) {
+        wchar_t baseName[MAX_PATH]{};
+        const DWORD len =
+            GetModuleBaseNameW(GetCurrentProcess(), modules[idx], baseName, MAX_PATH);
+        if (len == 0) {
+            continue;
+        }
+        const std::string lower = geekdesk::core::utf8::ToLowerAscii(
+            geekdesk::core::utf8::WideToUtf8(std::wstring_view(baseName, len)));
+        if (lower == "d3d10warp.dll") {
+            res.warpLoaded = true;
+        }
+        if (lower.find("everything") != std::string::npos) {
+            res.everythingLoaded = true;
+        }
+        if (lower.starts_with("nvwgf") || lower.starts_with("nvldumd") ||
+            lower.starts_with("nvoglv") || lower.starts_with("amdxc") ||
+            lower.starts_with("aticfx") || lower.starts_with("atiumd") ||
+            lower.starts_with("igd10") || lower.starts_with("igd12") ||
+            lower.starts_with("igc64") || lower.starts_with("igdgmm") ||
+            lower.starts_with("qcdx")) {
+            res.gpuUmdLoaded = true;
+        }
+    }
+    return res;
+}
+
 int RunSmokeUi(HINSTANCE hInstance,
                const std::filesystem::path& dataDir,
                const ConsoleOutput& out) {
@@ -181,7 +224,17 @@ int RunSmokeUi(HINSTANCE hInstance,
         return 11;
     }
 
+    geekdesk::storage::BackupManager::CreateDailyBackupsIfNeeded(
+        dataDir, settingsRes.value.behavior.backupRetentionDays);
+
     geekdesk::storage::FileLogger logger(dataDir / L"logs", 14);
+    if (settingsRes.recoveredFromBackup) {
+        logger.Warn("Recovered settings.json from daily backup");
+    }
+    if (catalogRes.recoveredFromBackup) {
+        logger.Warn("Recovered catalog.json from daily backup");
+    }
+
     geekdesk::ui::MainWindow window(dataDir, settingsRes.value, catalogRes.value, &logger, 0);
     if (!window.Create(hInstance, false)) {
         out.WriteLine("ERROR: MainWindow::Create failed");
@@ -194,41 +247,7 @@ int RunSmokeUi(HINSTANCE hInstance,
     GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
                          sizeof(pmc));
 
-    bool warpLoaded = false;
-    bool gpuUmdLoaded = false;
-    bool everythingLoaded = false;
-    std::vector<HMODULE> modules(256);
-    DWORD bytesNeeded = 0;
-    if (EnumProcessModules(GetCurrentProcess(), modules.data(),
-                           static_cast<DWORD>(modules.size() * sizeof(HMODULE)), &bytesNeeded)) {
-        const std::size_t count =
-            std::min<std::size_t>(modules.size(), bytesNeeded / sizeof(HMODULE));
-        for (std::size_t idx = 0; idx < count; ++idx) {
-            wchar_t baseName[MAX_PATH]{};
-            const DWORD len =
-                GetModuleBaseNameW(GetCurrentProcess(), modules[idx], baseName, MAX_PATH);
-            if (len == 0) {
-                continue;
-            }
-            const std::string lower = geekdesk::core::utf8::ToLowerAscii(
-                geekdesk::core::utf8::WideToUtf8(std::wstring_view(baseName, len)));
-            if (lower == "d3d10warp.dll") {
-                warpLoaded = true;
-            }
-            if (lower.find("everything") != std::string::npos) {
-                everythingLoaded = true;
-            }
-            if (lower.starts_with("nvwgf") || lower.starts_with("nvldumd") ||
-                lower.starts_with("nvoglv") || lower.starts_with("amdxc") ||
-                lower.starts_with("aticfx") || lower.starts_with("atiumd") ||
-                lower.starts_with("igd10") || lower.starts_with("igd12") ||
-                lower.starts_with("igc64") || lower.starts_with("igdgmm") ||
-                lower.starts_with("qcdx")) {
-                gpuUmdLoaded = true;
-            }
-        }
-    }
-
+    const ModuleAuditResult modAudit = AuditLoadedModules();
     const std::size_t displayed = window.DisplayedItemCount();
     const bool underMemoryBudget = (pmc.PrivateUsage < (25ULL * 1024ULL * 1024ULL));
 
@@ -242,11 +261,72 @@ int RunSmokeUi(HINSTANCE hInstance,
                   " / " + std::to_string(displayed));
     out.WriteLine("  Working Set       : " + FormatMegabytes(pmc.WorkingSetSize));
     out.WriteLine("  Private Bytes     : " + FormatMegabytes(pmc.PrivateUsage));
-    out.WriteLine("  WARP Loaded       : " + std::string(warpLoaded ? "true" : "false"));
-    out.WriteLine("  GPU UMD Loaded    : " + std::string(gpuUmdLoaded ? "true" : "false"));
-    out.WriteLine("  Everything Loaded : " + std::string(everythingLoaded ? "true" : "false"));
+    out.WriteLine("  WARP Loaded       : " + std::string(modAudit.warpLoaded ? "true" : "false"));
+    out.WriteLine("  GPU UMD Loaded    : " + std::string(modAudit.gpuUmdLoaded ? "true" : "false"));
+    out.WriteLine("  Everything Loaded : " +
+                  std::string(modAudit.everythingLoaded ? "true" : "false"));
 
-    return (rendered && !gpuUmdLoaded && !everythingLoaded && underMemoryBudget) ? 0 : 13;
+    return (rendered && !modAudit.gpuUmdLoaded && !modAudit.everythingLoaded && underMemoryBudget)
+               ? 0
+               : 13;
+}
+
+int RunSoakTest(HINSTANCE hInstance,
+                const std::filesystem::path& dataDir,
+                int cycles,
+                const ConsoleOutput& out) {
+    std::string layoutErr;
+    if (!geekdesk::storage::BackupManager::EnsureDataLayout(dataDir, layoutErr)) {
+        out.WriteLine("ERROR: EnsureDataLayout failed: " + layoutErr);
+        return 10;
+    }
+
+    const auto settingsRes = geekdesk::storage::BackupManager::LoadSettingsWithRecovery(dataDir);
+    const auto catalogRes = geekdesk::storage::BackupManager::LoadCatalogWithRecovery(dataDir);
+    if (!settingsRes.ok || !catalogRes.ok) {
+        out.WriteLine("ERROR: Failed to load settings or catalog for soak test");
+        return 11;
+    }
+
+    geekdesk::storage::FileLogger logger(dataDir / L"logs", 14);
+    geekdesk::ui::MainWindow window(dataDir, settingsRes.value, catalogRes.value, &logger, 0);
+    if (!window.Create(hInstance, false)) {
+        out.WriteLine("ERROR: MainWindow::Create failed");
+        return 12;
+    }
+
+    const geekdesk::ui::SoakReport soak = window.RunSoakCycles(cycles);
+    const ModuleAuditResult modAudit = AuditLoadedModules();
+
+    window.Destroy();
+    logger.Flush();
+
+    const bool gdiOk = (soak.gdiEnd <= soak.gdiStart + 8);
+    const bool userOk = (soak.userEnd <= soak.userStart + 4);
+    const bool handlesOk = (soak.handlesEnd <= soak.handlesStart + 12);
+    const bool privOk = (soak.privateEnd < (60ULL * 1024ULL * 1024ULL)) &&
+                        (soak.privateEnd <= soak.privateStart + (4ULL * 1024ULL * 1024ULL));
+    const bool passed = soak.ok && gdiOk && userOk && handlesOk && privOk &&
+                        !modAudit.gpuUmdLoaded && !modAudit.everythingLoaded;
+
+    out.WriteLine("GeekDeskCpp Phase 4 Soak Stability Test (" + std::to_string(soak.cycles) +
+                  " cycles): " + std::string(passed ? "OK" : "FAILED"));
+    out.WriteLine("  GDI Objects       : " + std::to_string(soak.gdiStart) + " -> " +
+                  std::to_string(soak.gdiEnd));
+    out.WriteLine("  USER Objects      : " + std::to_string(soak.userStart) + " -> " +
+                  std::to_string(soak.userEnd));
+    out.WriteLine("  Process Handles   : " + std::to_string(soak.handlesStart) + " -> " +
+                  std::to_string(soak.handlesEnd));
+    out.WriteLine("  Working Set       : " + FormatMegabytes(soak.workingSetStart) + " -> " +
+                  FormatMegabytes(soak.workingSetEnd));
+    out.WriteLine("  Private Bytes     : " + FormatMegabytes(soak.privateStart) + " -> " +
+                  FormatMegabytes(soak.privateEnd));
+    out.WriteLine("  WARP Loaded       : " + std::string(modAudit.warpLoaded ? "true" : "false"));
+    out.WriteLine("  GPU UMD Loaded    : " + std::string(modAudit.gpuUmdLoaded ? "true" : "false"));
+    out.WriteLine("  Everything Loaded : " +
+                  std::string(modAudit.everythingLoaded ? "true" : "false"));
+
+    return passed ? 0 : 14;
 }
 
 } // namespace
@@ -272,16 +352,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     std::filesystem::path dataDir = GetExecutableDirectory() / L"data";
     std::optional<std::filesystem::path> verifyDir;
     bool smokeUi = false;
+    int soakCycles = 0;
 
     for (std::size_t i = 1; i < args.size(); ++i) {
         if (args[i] == L"--help" || args[i] == L"-h") {
             ConsoleOutput out;
             out.WriteLine("GeekDeskCpp Native Desktop Launcher (Mode A Direct2D Software)");
             out.WriteLine("Usage:");
-            out.WriteLine("  GeekDeskCpp.exe                           Launch desktop launcher UI");
-            out.WriteLine("  GeekDeskCpp.exe --data-dir <dir>          Override portable data directory");
-            out.WriteLine("  GeekDeskCpp.exe --verify-data <data-dir>  Validate Schema v1 JSONs read-only");
-            out.WriteLine("  GeekDeskCpp.exe --smoke-ui [--data-dir <dir>]  Run offscreen/hidden D2D paint smoke test");
+            out.WriteLine("  GeekDeskCpp.exe                               Launch desktop launcher UI");
+            out.WriteLine("  GeekDeskCpp.exe --data-dir <dir>              Override portable data directory");
+            out.WriteLine("  GeekDeskCpp.exe --verify-data <data-dir>      Validate Schema v1 JSONs read-only");
+            out.WriteLine("  GeekDeskCpp.exe --smoke-ui [--data-dir <dir>] Run Mode A UI smoke test");
+            out.WriteLine("  GeekDeskCpp.exe --soak-test [N] [--data-dir <dir>] Run N-cycle leak/soak check");
             return 0;
         }
         if (args[i] == L"--verify-data") {
@@ -302,7 +384,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
             dataDir = std::filesystem::path(args[++i]);
         } else if (args[i] == L"--smoke-ui") {
             smokeUi = true;
+        } else if (args[i] == L"--soak-test") {
+            soakCycles = 200;
+            if (i + 1 < args.size() && !args[i + 1].empty() && args[i + 1][0] != L'-') {
+                try {
+                    soakCycles = std::max(1, std::stoi(args[++i]));
+                } catch (...) {
+                    soakCycles = 200;
+                }
+            }
         }
+    }
+
+    if (soakCycles > 0) {
+        ConsoleOutput out;
+        return RunSoakTest(hInstance, dataDir, soakCycles, out);
     }
 
     if (smokeUi) {

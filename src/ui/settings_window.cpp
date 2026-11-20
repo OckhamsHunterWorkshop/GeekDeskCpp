@@ -487,6 +487,18 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             vec.clear();
         }
         snapshotPaths_.clear();
+        if (font_ != nullptr) {
+            DeleteObject(font_);
+            font_ = nullptr;
+        }
+        if (bgBrush_ != nullptr) {
+            DeleteObject(bgBrush_);
+            bgBrush_ = nullptr;
+        }
+        if (editBrush_ != nullptr) {
+            DeleteObject(editBrush_);
+            editBrush_ = nullptr;
+        }
         if (callbacks_.onClosed) {
             callbacks_.onClosed();
         }
@@ -498,6 +510,10 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
 void SettingsWindow::BuildControls() {
     const HINSTANCE hInst = GetModuleHandleW(nullptr);
+    if (font_ != nullptr) {
+        DeleteObject(font_);
+        font_ = nullptr;
+    }
     font_ = CreateFontW(-MulDiv(10, static_cast<int>(dpi_), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
                         FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");

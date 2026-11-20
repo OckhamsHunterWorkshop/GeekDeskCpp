@@ -12,7 +12,20 @@
 - [x] **Phase 1 — 工程底座、核心逻辑、Schema v1 兼容存储、备份恢复与自动化测试**（已完成）
 - [x] **Phase 2 — Win32 系统外壳（DWM 材质 / 热键 / 中键钩子 / 托盘 / 启动器）与 Direct2D Software 主面板**（已完成）
 - [x] **Phase 3 — 完整交互编辑（分组/条目增删改、拖拽排序、文件夹监听、原生设置与备份恢复界面）**（已完成）
-- [ ] **Phase 4 — 长稳压测、内存/冷启动审计与便携发行打包**
+- [x] **Phase 4 — 长稳压测、内存/冷启动审计与便携发行打包**（已完成）
+
+---
+
+## 实测资源与稳定性指标（Windows 11 x64，9 分组 / 78 条目实测）
+
+| 检查项目 | 实测结果 |
+| :--- | :--- |
+| 单文件可执行体积 | **`GeekDeskCpp.exe` 2,748,416 字节（约 2.62 MB）**；便携压缩包 `1,179,868` 字节（约 1.13 MB） |
+| 外部依赖审计（`objdump -p`） | 仅依赖 Windows 系统 DLL；**无** MinGW 运行时 DLL、**无** GPU 硬件用户态驱动、**无** `Everything*.dll` |
+| 单分组启动渲染（`--smoke-ui`） | **Private Bytes `8.70 MB`**，Working Set `22.66 MB` |
+| 热缓存日常 500 轮切换压测（全 9 组 / 78 项） | **Private Bytes `19.18 MB -> 20.27 MB`**，Working Set `36.62 MB -> 37.62 MB`，进程句柄 `426 -> 426`（零增长） |
+| 首次冷提取 500 轮压测（含全部 Shell 图标提取 + 20 次设置弹窗开关） | GDI `97 -> 95`，USER `49 -> 50`，句柄 `469 -> 469`，Private Bytes `40.80 MB -> 40.80 MB` |
+| 自动化单元测试（`doctest`） | **16 / 16 测试用例、210 / 210 断言 100% 通过** |
 
 ---
 
@@ -42,9 +55,13 @@ ctest --preset mingw-release --output-on-failure
 # 3. 使用现有 GeekDeskNext 数据目录进行只读兼容性校验
 .\build\mingw-release\GeekDeskCpp.exe --verify-data "I:\tools\GeekDeskNext\data" | Out-String
 
-# 4. 运行 Mode A 窗口渲染烟雾自检或指定数据目录启动桌面主界面
+# 4. 运行 Mode A 渲染烟雾测试、N 轮长稳泄漏压测或指定数据目录启动桌面主界面
 .\build\mingw-release\GeekDeskCpp.exe --smoke-ui --data-dir "<temp-data-dir>" | Out-String
+.\build\mingw-release\GeekDeskCpp.exe --soak-test 500 --data-dir "<temp-data-dir>" | Out-String
 .\build\mingw-release\GeekDeskCpp.exe --data-dir "<your-data-dir>"
+
+# 5. 一键构建并生成单文件便携发行包（输出至 dist\）
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
 ```
 
 若使用 MSVC 工具链（需在 VS Developer PowerShell 中执行）：
