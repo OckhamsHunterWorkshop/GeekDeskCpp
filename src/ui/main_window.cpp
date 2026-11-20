@@ -1,0 +1,1232 @@
+#include "ui/main_window.hpp"
+
+#include "core/catalog_sorter.hpp"
+#include "core/folder_sync.hpp"
+#include "core/placement_math.hpp"
+#include "core/utf8.hpp"
+#include "platform/autostart.hpp"
+#include "platform/backdrop.hpp"
+#include "platform/dpi_helper.hpp"
+#include "platform/fullscreen_detector.hpp"
+#include "platform/shell_launcher.hpp"
+#include "resource.h"
+#include "storage/json_codec.hpp"
+
+#include <imm.h>
+#include <windowsx.h>
+#include <wtsapi32.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+namespace geekdesk::ui {
+
+namespace {
+
+constexpr const wchar_t* kWindowClassName = L"GeekDeskCppMainWindow";
+constexpr UINT kMsgMiddleClick = WM_APP + 1;
+constexpr UINT kMsgTrayIcon = WM_APP + 2;
+constexpr UINT kMsgIconReady = WM_APP + 3;
+
+constexpr UINT_PTR kTimerCaret = 1;
+constexpr UINT_PTR kTimerHoverGroup = 2;
+constexpr UINT_PTR kTimerResumeRecover = 3;
+
+std::string CurrentUtcIsoTimestamp() {
+    SYSTEMTIME st{};
+    GetSystemTime(&st);
+    char buf[32]{};
+    std::snprintf(buf, sizeof(buf), "%04u-%02u-%02uT%02u:%02u:%02uZ", st.wYear, st.wMonth, st.wDay,
+                  st.wHour, st.wMinute, st.wSecond);
+    return std::string(buf);
+}
+
+void ForceWindowForeground(HWND hwnd) {
+    AllowSetForegroundWindow(ASFW_ANY);
+    const HWND fg = GetForegroundWindow();
+    if (fg == nullptr || fg == hwnd) {
+        SetForegroundWindow(hwnd);
+        return;
+    }
+    const DWORD fgTid = GetWindowThreadProcessId(fg, nullptr);
+    const DWORD curTid = GetCurrentThreadId();
+    bool attached = false;
+    if (fgTid != 0 && fgTid != curTid) {
+        attached = (AttachThreadInput(fgTid, curTid, TRUE) != FALSE);
+    }
+    SetForegroundWindow(hwnd);
+    BringWindowToTop(hwnd);
+    SetFocus(hwnd);
+    if (attached) {
+        AttachThreadInput(fgTid, curTid, FALSE);
+    }
+}
+
+std::wstring ReadClipboardText(HWND hwnd) {
+    if (!OpenClipboard(hwnd)) {
+        return {};
+    }
+    std::wstring result;
+    if (HANDLE hData = GetClipboardData(CF_UNICODETEXT); hData != nullptr) {
+        if (const auto* raw = static_cast<const wchar_t*>(GlobalLock(hData)); raw != nullptr) {
+            result = raw;
+            GlobalUnlock(hData);
+        }
+    }
+    CloseClipboard();
+    return result;
+}
+
+} // namespace
+
+MainWindow::MainWindow(std::filesystem::path dataRoot,
+                       core::AppSettings settings,
+                       core::CatalogDocument catalog,
+                       storage::FileLogger* logger,
+                       UINT singleInstanceMsg)
+    : dataRoot_(std::move(dataRoot)),
+      settings_(std::move(settings)),
+      catalog_(std::move(catalog)),
+      logger_(logger),
+      singleInstanceMsg_(singleInstanceMsg),
+      debouncedWriter_([this](const std::filesystem::path& path, const std::string& err) {
+          if (logger_ != nullptr) {
+              logger_->Error("Async write failed for '" + core::utf8::PathToUtf8(path) +
+                             "': " + err);
+          }
+      }) {
+    if (catalog_.groups.empty()) {
+        catalog_ = core::CatalogDocument::CreateDefault();
+    }
+
+    // Ensure consistent sorting & folder sync on startup
+    for (auto& grp : catalog_.groups) {
+        if (grp.kind == core::GroupKind::LinkedFolder) {
+            (void)core::SyncLinkedFolderGroup(grp);
+        }
+        core::SortItems(grp.items, settings_.behavior.itemSort);
+    }
+    core::SortGroups(catalog_.groups, settings_.behavior.groupSort);
+
+    if (settings_.state.lastSelectedGroupId.has_value()) {
+        for (std::size_t i = 0; i < catalog_.groups.size(); ++i) {
+            if (catalog_.groups[i].id == *settings_.state.lastSelectedGroupId) {
+                activeGroupIndex_ = i;
+                break;
+            }
+        }
+    }
+    searchEngine_.Rebuild(catalog_);
+}
+
+MainWindow::~MainWindow() {
+    Destroy();
+}
+
+bool MainWindow::Create(HINSTANCE hInstance, bool registerSystemHooks) {
+    if (hwnd_ != nullptr) {
+        return true;
+    }
+
+    if (!renderer_.Initialize()) {
+        if (logger_ != nullptr) {
+            logger_->Error("Failed to initialize Direct2D/DirectWrite factories");
+        }
+        return false;
+    }
+
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_DBLCLKS | CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = &MainWindow::StaticWndProc;
+    wc.hInstance = hInstance;
+    wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APPICON));
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.lpszClassName = kWindowClassName;
+    if (RegisterClassExW(&wc) == 0 && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        if (logger_ != nullptr) {
+            logger_->Error("RegisterClassExW failed (Win32 error " +
+                           std::to_string(GetLastError()) + ")");
+        }
+        return false;
+    }
+
+    POINT cursorPt{};
+    GetCursorPos(&cursorPt);
+    const auto metrics = platform::GetMonitorMetricsForPoint(cursorPt);
+    dpi_ = metrics.dpi;
+    const int initW = core::DipToPhysicalPx(settings_.window.width, dpi_);
+    const int initH = core::DipToPhysicalPx(settings_.window.height, dpi_);
+    const auto initPos = core::ComputeCenteredPosition(initW, initH, metrics.workArea);
+
+    DWORD exStyle = WS_EX_TOOLWINDOW;
+    if (settings_.window.alwaysTopmost) {
+        exStyle |= WS_EX_TOPMOST;
+    }
+
+    suppressSizePersist_ = true;
+    hwnd_ = CreateWindowExW(exStyle, kWindowClassName, L"GeekDeskCpp",
+                            WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN, initPos.x, initPos.y,
+                            initW, initH, nullptr, nullptr, hInstance, this);
+    suppressSizePersist_ = false;
+
+    if (hwnd_ == nullptr) {
+        if (logger_ != nullptr) {
+            logger_->Error("CreateWindowExW failed (Win32 error " +
+                           std::to_string(GetLastError()) + ")");
+        }
+        return false;
+    }
+
+    dpi_ = platform::GetWindowDpi(hwnd_);
+    iconCache_.Initialize(dataRoot_, hwnd_, kMsgIconReady);
+    ApplyBackdropAndPalette();
+    RebuildDisplayedItems();
+
+    if (registerSystemHooks) {
+        hooksRegistered_ = true;
+        wtsRegistered_ = (WTSRegisterSessionNotification(hwnd_, NOTIFY_FOR_THIS_SESSION) != FALSE);
+
+        if (settings_.activation.enableHotKey) {
+            std::string err;
+            if (!hotKeyManager_.Register(hwnd_, settings_.activation.hotKey, err)) {
+                hotKeyError_ = err;
+                if (logger_ != nullptr) {
+                    logger_->Warn(err);
+                }
+            }
+        }
+
+        if (settings_.activation.enableMiddleMouse) {
+            if (!mouseHook_.Start(hwnd_, kMsgMiddleClick) && logger_ != nullptr) {
+                logger_->Warn("Failed to install WH_MOUSE_LL hook");
+            }
+        }
+
+        if (settings_.state.showTrayIcon) {
+            trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp");
+        }
+
+        // Synchronize startup AutoStart registry state with settings.behavior.autoStart cleanly
+        (void)platform::SetAutoStartEnabled(settings_.behavior.autoStart);
+    }
+
+    ResetDefaultStatus();
+    return true;
+}
+
+void MainWindow::Destroy() {
+    if (hwnd_ != nullptr) {
+        DestroyWindow(hwnd_);
+        hwnd_ = nullptr;
+    }
+    renderer_.Shutdown();
+    debouncedWriter_.Flush();
+}
+
+void MainWindow::ShowAndPosition() {
+    if (hwnd_ == nullptr) {
+        return;
+    }
+
+    POINT cursorPt{};
+    GetCursorPos(&cursorPt);
+    const auto metrics = platform::GetMonitorMetricsForPoint(cursorPt);
+    dpi_ = metrics.dpi;
+
+    const int widthPx = std::max(320, core::DipToPhysicalPx(settings_.window.width, dpi_));
+    const int heightPx = std::max(240, core::DipToPhysicalPx(settings_.window.height, dpi_));
+
+    const core::PixelPoint pos =
+        settings_.window.followMouse
+            ? core::ComputeTopLeftClampedPosition({cursorPt.x, cursorPt.y}, widthPx, heightPx,
+                                                  metrics.workArea)
+            : core::ComputeCenteredPosition(widthPx, heightPx, metrics.workArea);
+
+    const HWND zOrder = settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST;
+    suppressSizePersist_ = true;
+    SetWindowPos(hwnd_, zOrder, pos.x, pos.y, widthPx, heightPx, SWP_SHOWWINDOW);
+    suppressSizePersist_ = false;
+
+    ApplyBackdropAndPalette();
+    lastShownTickMs_ = GetTickCount64();
+    ForceWindowForeground(hwnd_);
+
+    caretVisible_ = true;
+    SetTimer(hwnd_, kTimerCaret, 530, nullptr);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void MainWindow::HideWindow() {
+    if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
+        return;
+    }
+    KillTimer(hwnd_, kTimerCaret);
+    KillTimer(hwnd_, kTimerHoverGroup);
+    imeCompWide_.clear();
+    if (HIMC himc = ImmGetContext(hwnd_); himc != nullptr) {
+        ImmNotifyIME(himc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+        ImmReleaseContext(hwnd_, himc);
+    }
+    ShowWindow(hwnd_, SW_HIDE);
+    renderer_.ReleaseBackBuffer();
+}
+
+void MainWindow::ToggleWindow() {
+    if (hwnd_ == nullptr) {
+        return;
+    }
+    if (IsWindowVisible(hwnd_)) {
+        HideWindow();
+    } else {
+        ShowAndPosition();
+    }
+}
+
+bool MainWindow::RenderSmokeFrame() {
+    if (hwnd_ == nullptr) {
+        return false;
+    }
+    ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
+    const bool updated = (UpdateWindow(hwnd_) != FALSE);
+    HideWindow();
+    return updated;
+}
+
+LRESULT CALLBACK MainWindow::StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    MainWindow* self = nullptr;
+    if (msg == WM_NCCREATE) {
+        const auto* cs = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        self = static_cast<MainWindow*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+        self->hwnd_ = hwnd;
+    } else {
+        self = reinterpret_cast<MainWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    }
+
+    if (self != nullptr) {
+        return self->HandleMessage(msg, wParam, lParam);
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (singleInstanceMsg_ != 0 && msg == singleInstanceMsg_) {
+        ShowAndPosition();
+        return 0;
+    }
+    if (trayIcon_.TaskbarCreatedMessage() != 0 && msg == trayIcon_.TaskbarCreatedMessage()) {
+        if (hooksRegistered_ && settings_.state.showTrayIcon) {
+            trayIcon_.Recreate();
+        }
+        return 0;
+    }
+
+    switch (msg) {
+    case WM_NCCALCSIZE:
+        if (wParam == TRUE) {
+            return 0;
+        }
+        break;
+
+    case WM_GETMINMAXINFO: {
+        auto* mmi = reinterpret_cast<MINMAXINFO*>(lParam);
+        mmi->ptMinTrackSize.x = core::DipToPhysicalPx(480.0, dpi_);
+        mmi->ptMinTrackSize.y = core::DipToPhysicalPx(320.0, dpi_);
+        return 0;
+    }
+
+    case WM_NCHITTEST: {
+        RECT winRect{};
+        GetWindowRect(hwnd_, &winRect);
+        const int x = GET_X_LPARAM(lParam);
+        const int y = GET_Y_LPARAM(lParam);
+        const int border = core::DipToPhysicalPx(6.0, dpi_);
+
+        const bool onLeft = x < winRect.left + border;
+        const bool onRight = x >= winRect.right - border;
+        const bool onTop = y < winRect.top + border;
+        const bool onBottom = y >= winRect.bottom - border;
+
+        if (onTop && onLeft) {
+            return HTTOPLEFT;
+        }
+        if (onTop && onRight) {
+            return HTTOPRIGHT;
+        }
+        if (onBottom && onLeft) {
+            return HTBOTTOMLEFT;
+        }
+        if (onBottom && onRight) {
+            return HTBOTTOMRIGHT;
+        }
+        if (onLeft) {
+            return HTLEFT;
+        }
+        if (onRight) {
+            return HTRIGHT;
+        }
+        if (onTop) {
+            return HTTOP;
+        }
+        if (onBottom) {
+            return HTBOTTOM;
+        }
+
+        POINT clientPt{x, y};
+        ScreenToClient(hwnd_, &clientPt);
+        const float xDip = PxToDip(clientPt.x);
+        const float yDip = PxToDip(clientPt.y);
+        if (layout_.headerRect.Contains(xDip, yDip) && !layout_.searchBoxRect.Contains(xDip, yDip) &&
+            HitTestHeaderButton(xDip, yDip) == HeaderButton::None) {
+            return HTCAPTION;
+        }
+        return HTCLIENT;
+    }
+
+    case WM_ERASEBKGND:
+        return 1;
+
+    case WM_PAINT:
+        OnPaint();
+        return 0;
+
+    case WM_SIZE:
+        OnResizeOrDpiChanged();
+        return 0;
+
+    case WM_DPICHANGED: {
+        dpi_ = LOWORD(wParam);
+        const auto* suggested = reinterpret_cast<const RECT*>(lParam);
+        if (suggested != nullptr) {
+            suppressSizePersist_ = true;
+            SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top,
+                         suggested->right - suggested->left, suggested->bottom - suggested->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+            suppressSizePersist_ = false;
+        }
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return 0;
+    }
+
+    case WM_SETTINGCHANGE:
+        if (lParam != 0 &&
+            std::wstring_view(reinterpret_cast<const wchar_t*>(lParam)) == L"ImmersiveColorSet") {
+            ApplyBackdropAndPalette();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return 0;
+
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE && settings_.window.hidePolicy == core::HidePolicy::OnDeactivate &&
+            !inTrayMenu_ && (GetTickCount64() - lastShownTickMs_ > 180)) {
+            HideWindow();
+        }
+        return 0;
+
+    case WM_MOUSEMOVE:
+        OnMouseMove(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+
+    case WM_MOUSELEAVE:
+        OnMouseLeave();
+        return 0;
+
+    case WM_LBUTTONDOWN:
+        OnLeftButtonDown(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+
+    case WM_LBUTTONDBLCLK:
+        OnLeftButtonDoubleClick(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
+        return 0;
+
+    case WM_MOUSEWHEEL:
+        OnMouseWheel(GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), GET_WHEEL_DELTA_WPARAM(wParam));
+        return 0;
+
+    case WM_KEYDOWN:
+        OnKeyDown(wParam);
+        return 0;
+
+    case WM_CHAR:
+        OnChar(static_cast<wchar_t>(wParam));
+        return 0;
+
+    case WM_IME_STARTCOMPOSITION:
+        OnImeStartComposition();
+        break;
+
+    case WM_IME_COMPOSITION:
+        OnImeComposition(lParam);
+        break;
+
+    case WM_IME_ENDCOMPOSITION:
+        imeCompWide_.clear();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        break;
+
+    case WM_HOTKEY:
+        if (static_cast<int>(wParam) == platform::HotKeyManager::kDefaultHotKeyId) {
+            OnHotKeyTriggered();
+        }
+        return 0;
+
+    case kMsgMiddleClick:
+        if (settings_.activation.enableMiddleMouse) {
+            OnHotKeyTriggered();
+        }
+        return 0;
+
+    case kMsgTrayIcon:
+        OnTrayIconEvent(lParam);
+        return 0;
+
+    case kMsgIconReady:
+        if (IsWindowVisible(hwnd_)) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return 0;
+
+    case WM_POWERBROADCAST:
+        if (wParam == PBT_APMRESUMESUSPEND || wParam == PBT_APMRESUMEAUTOMATIC) {
+            SetTimer(hwnd_, kTimerResumeRecover, 300, nullptr);
+        }
+        return TRUE;
+
+    case WM_WTSSESSION_CHANGE:
+        if (wParam == WTS_SESSION_UNLOCK) {
+            SetTimer(hwnd_, kTimerResumeRecover, 300, nullptr);
+        }
+        return 0;
+
+    case WM_TIMER:
+        if (wParam == kTimerCaret) {
+            if (searchFocused_) {
+                caretVisible_ = !caretVisible_;
+                InvalidateRect(hwnd_, nullptr, FALSE);
+            }
+        } else if (wParam == kTimerHoverGroup) {
+            KillTimer(hwnd_, kTimerHoverGroup);
+            if (settings_.behavior.hoverSwitchGroup && hoveredGroupIdx_ >= 0 &&
+                static_cast<std::size_t>(hoveredGroupIdx_) < catalog_.groups.size()) {
+                SelectGroup(static_cast<std::size_t>(hoveredGroupIdx_), true);
+            }
+        } else if (wParam == kTimerResumeRecover) {
+            KillTimer(hwnd_, kTimerResumeRecover);
+            RefreshHooksAndTray();
+        }
+        return 0;
+
+    case WM_DESTROY:
+        KillTimer(hwnd_, kTimerCaret);
+        KillTimer(hwnd_, kTimerHoverGroup);
+        KillTimer(hwnd_, kTimerResumeRecover);
+        if (wtsRegistered_) {
+            WTSUnRegisterSessionNotification(hwnd_);
+            wtsRegistered_ = false;
+        }
+        mouseHook_.Stop();
+        hotKeyManager_.Unregister();
+        trayIcon_.Hide();
+        iconCache_.Shutdown();
+        hwnd_ = nullptr;
+        PostQuitMessage(0);
+        return 0;
+    }
+
+    return DefWindowProcW(hwnd_, msg, wParam, lParam);
+}
+
+void MainWindow::OnPaint() {
+    PAINTSTRUCT ps{};
+    HDC hdc = BeginPaint(hwnd_, &ps);
+    RECT rc{};
+    GetClientRect(hwnd_, &rc);
+    const int widthPx = rc.right - rc.left;
+    const int heightPx = rc.bottom - rc.top;
+
+    if (hdc != nullptr && widthPx > 0 && heightPx > 0) {
+        RenderState state;
+        state.settings = &settings_;
+        state.palette = &palette_;
+        state.groups = &catalog_.groups;
+        state.activeGroupIndex = activeGroupIndex_;
+        state.displayedItems = &displayedItems_;
+        state.isSearchActive = !searchQueryWide_.empty();
+        state.searchQueryWide = searchQueryWide_;
+        state.imeCompWide = imeCompWide_;
+        state.searchCaretIndex = searchCaretIndex_;
+        state.searchFocused = searchFocused_;
+        state.caretVisible = caretVisible_;
+        state.scrollOffsetDip = scrollOffsetDip_;
+        state.hoveredGroupIdx = hoveredGroupIdx_;
+        state.hoveredTileIdx = hoveredTileIdx_;
+        state.selectedTileIdx = selectedTileIdx_;
+        state.hoveredHeaderButton = hoveredHeaderBtn_;
+        state.alwaysTopmost = settings_.window.alwaysTopmost;
+        state.statusText = statusText_;
+        state.dataRoot = dataRoot_;
+        state.iconCache = &iconCache_;
+
+        renderer_.Render(hdc, widthPx, heightPx, dpi_, state, layout_);
+        scrollOffsetDip_ = layout_.clampedScrollDip;
+    }
+
+    EndPaint(hwnd_, &ps);
+}
+
+void MainWindow::OnResizeOrDpiChanged() {
+    if (suppressSizePersist_ || hwnd_ == nullptr || IsIconic(hwnd_)) {
+        return;
+    }
+    RECT rc{};
+    if (!GetWindowRect(hwnd_, &rc)) {
+        return;
+    }
+    const double scale = 96.0 / static_cast<double>(dpi_ > 0 ? dpi_ : 96u);
+    const double wDip = std::round(static_cast<double>(rc.right - rc.left) * scale);
+    const double hDip = std::round(static_cast<double>(rc.bottom - rc.top) * scale);
+    if (wDip >= 480.0 && hDip >= 320.0 &&
+        (std::abs(wDip - settings_.window.width) >= 1.0 ||
+         std::abs(hDip - settings_.window.height) >= 1.0)) {
+        settings_.window.width = wDip;
+        settings_.window.height = hDip;
+        ScheduleSaveSettings();
+    }
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void MainWindow::OnMouseMove(int xPx, int yPx) {
+    if (!trackingMouseLeave_) {
+        TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd_, 0};
+        TrackMouseEvent(&tme);
+        trackingMouseLeave_ = true;
+    }
+
+    const float xDip = PxToDip(xPx);
+    const float yDip = PxToDip(yPx);
+
+    const int newGroup = HitTestGroup(xDip, yDip);
+    const int newTile = HitTestTile(xDip, yDip);
+    const HeaderButton newBtn = HitTestHeaderButton(xDip, yDip);
+    const bool groupChanged = (newGroup != hoveredGroupIdx_);
+
+    if (groupChanged) {
+        hoveredGroupIdx_ = newGroup;
+        if (settings_.behavior.hoverSwitchGroup && newGroup >= 0) {
+            SetTimer(hwnd_, kTimerHoverGroup, 180, nullptr);
+        } else {
+            KillTimer(hwnd_, kTimerHoverGroup);
+        }
+    }
+
+    const bool changed = (groupChanged || newTile != hoveredTileIdx_ || newBtn != hoveredHeaderBtn_);
+    hoveredTileIdx_ = newTile;
+    hoveredHeaderBtn_ = newBtn;
+
+    if (changed) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void MainWindow::OnMouseLeave() {
+    trackingMouseLeave_ = false;
+    KillTimer(hwnd_, kTimerHoverGroup);
+    if (hoveredGroupIdx_ != -1 || hoveredTileIdx_ != -1 ||
+        hoveredHeaderBtn_ != HeaderButton::None) {
+        hoveredGroupIdx_ = -1;
+        hoveredTileIdx_ = -1;
+        hoveredHeaderBtn_ = HeaderButton::None;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
+    const float xDip = PxToDip(xPx);
+    const float yDip = PxToDip(yPx);
+
+    if (const HeaderButton btn = HitTestHeaderButton(xDip, yDip); btn != HeaderButton::None) {
+        if (btn == HeaderButton::Pin) {
+            settings_.window.alwaysTopmost = !settings_.window.alwaysTopmost;
+            SetWindowPos(hwnd_, settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0,
+                         0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            ScheduleSaveSettings();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        } else if (btn == HeaderButton::Refresh) {
+            SyncAllLinkedFolders(true);
+        } else if (btn == HeaderButton::Hide) {
+            HideWindow();
+        }
+        return;
+    }
+
+    if (layout_.searchBoxRect.Contains(xDip, yDip)) {
+        searchFocused_ = true;
+        searchCaretIndex_ = searchQueryWide_.size();
+        caretVisible_ = true;
+        SetTimer(hwnd_, kTimerCaret, 530, nullptr);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+
+    searchFocused_ = false;
+    KillTimer(hwnd_, kTimerCaret);
+
+    if (const int gIdx = HitTestGroup(xDip, yDip); gIdx >= 0) {
+        SelectGroup(static_cast<std::size_t>(gIdx), true);
+        return;
+    }
+
+    if (const int tIdx = HitTestTile(xDip, yDip); tIdx >= 0) {
+        selectedTileIdx_ = tIdx;
+        if (!settings_.behavior.doubleClickToLaunch) {
+            LaunchDisplayedIndex(static_cast<std::size_t>(tIdx));
+        } else {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return;
+    }
+
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void MainWindow::OnLeftButtonDoubleClick(int xPx, int yPx) {
+    if (!settings_.behavior.doubleClickToLaunch) {
+        return;
+    }
+    const float xDip = PxToDip(xPx);
+    const float yDip = PxToDip(yPx);
+    if (const int tIdx = HitTestTile(xDip, yDip); tIdx >= 0) {
+        selectedTileIdx_ = tIdx;
+        LaunchDisplayedIndex(static_cast<std::size_t>(tIdx));
+    }
+}
+
+void MainWindow::OnMouseWheel(int xScreenPx, int yScreenPx, short wheelDelta) {
+    if (wheelDelta == 0) {
+        return;
+    }
+    POINT clientPt{xScreenPx, yScreenPx};
+    ScreenToClient(hwnd_, &clientPt);
+    const float xDip = PxToDip(clientPt.x);
+    const float yDip = PxToDip(clientPt.y);
+
+    if (layout_.sidebarRect.Contains(xDip, yDip)) {
+        SwitchGroupByDelta(wheelDelta > 0 ? -1 : 1);
+        return;
+    }
+
+    const float step = 68.0f * (static_cast<float>(wheelDelta) / 120.0f);
+    if (searchQueryWide_.empty()) {
+        if (layout_.maxScrollDip <= 1.0f ||
+            (wheelDelta > 0 && scrollOffsetDip_ <= 0.5f) ||
+            (wheelDelta < 0 && scrollOffsetDip_ >= layout_.maxScrollDip - 0.5f)) {
+            SwitchGroupByDelta(wheelDelta > 0 ? -1 : 1);
+            return;
+        }
+    }
+
+    scrollOffsetDip_ = std::clamp(scrollOffsetDip_ - step, 0.0f, layout_.maxScrollDip);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void MainWindow::OnKeyDown(WPARAM vk) {
+    const bool ctrlDown = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+
+    if (ctrlDown && vk == 'F') {
+        searchFocused_ = true;
+        searchCaretIndex_ = searchQueryWide_.size();
+        caretVisible_ = true;
+        SetTimer(hwnd_, kTimerCaret, 530, nullptr);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+
+    if (ctrlDown && vk == 'V' &&
+        (searchFocused_ || settings_.behavior.searchActivation == core::SearchActivationMode::TypeToSearch)) {
+        std::wstring clip = ReadClipboardText(hwnd_);
+        clip.erase(std::remove_if(clip.begin(), clip.end(),
+                                  [](wchar_t c) { return c == L'\r' || c == L'\n'; }),
+                   clip.end());
+        if (!clip.empty()) {
+            searchFocused_ = true;
+            const std::size_t pos = std::min(searchCaretIndex_, searchQueryWide_.size());
+            searchQueryWide_.insert(pos, clip);
+            searchCaretIndex_ = pos + clip.size();
+            scrollOffsetDip_ = 0.0f;
+            RebuildDisplayedItems();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return;
+    }
+
+    if (ctrlDown && vk == VK_BACK) {
+        if (!searchQueryWide_.empty()) {
+            searchQueryWide_.clear();
+            searchCaretIndex_ = 0;
+            scrollOffsetDip_ = 0.0f;
+            RebuildDisplayedItems();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return;
+    }
+
+    if (vk == VK_ESCAPE) {
+        if (!searchQueryWide_.empty()) {
+            searchQueryWide_.clear();
+            searchCaretIndex_ = 0;
+            scrollOffsetDip_ = 0.0f;
+            RebuildDisplayedItems();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        } else {
+            HideWindow();
+        }
+        return;
+    }
+
+    if (vk == VK_RETURN) {
+        if (!displayedItems_.empty()) {
+            const std::size_t targetIdx =
+                (selectedTileIdx_ >= 0 &&
+                 static_cast<std::size_t>(selectedTileIdx_) < displayedItems_.size())
+                    ? static_cast<std::size_t>(selectedTileIdx_)
+                    : 0u;
+            LaunchDisplayedIndex(targetIdx);
+        }
+        return;
+    }
+
+    if (vk == VK_BACK &&
+        (searchFocused_ || settings_.behavior.searchActivation == core::SearchActivationMode::TypeToSearch)) {
+        if (searchCaretIndex_ > 0 && !searchQueryWide_.empty()) {
+            const std::size_t pos = std::min(searchCaretIndex_, searchQueryWide_.size());
+            searchQueryWide_.erase(pos - 1, 1);
+            searchCaretIndex_ = pos - 1;
+            scrollOffsetDip_ = 0.0f;
+            RebuildDisplayedItems();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return;
+    }
+
+    if (vk == VK_DELETE && searchFocused_) {
+        if (searchCaretIndex_ < searchQueryWide_.size()) {
+            searchQueryWide_.erase(searchCaretIndex_, 1);
+            scrollOffsetDip_ = 0.0f;
+            RebuildDisplayedItems();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+        return;
+    }
+
+    if (vk == VK_HOME && searchFocused_) {
+        searchCaretIndex_ = 0;
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+    if (vk == VK_END && searchFocused_) {
+        searchCaretIndex_ = searchQueryWide_.size();
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+
+    if (!displayedItems_.empty() &&
+        (vk == VK_LEFT || vk == VK_RIGHT || vk == VK_UP || vk == VK_DOWN)) {
+        const int total = static_cast<int>(displayedItems_.size());
+        const int cols = std::max(1, layout_.gridColumns);
+        int cur = (selectedTileIdx_ >= 0 && selectedTileIdx_ < total) ? selectedTileIdx_ : 0;
+
+        if (vk == VK_LEFT) {
+            cur = std::max(0, cur - 1);
+        } else if (vk == VK_RIGHT) {
+            cur = std::min(total - 1, cur + 1);
+        } else if (vk == VK_UP) {
+            if (cur - cols >= 0) {
+                cur -= cols;
+            }
+        } else if (vk == VK_DOWN) {
+            if (cur + cols < total) {
+                cur += cols;
+            }
+        }
+        selectedTileIdx_ = cur;
+        EnsureTileVisible(static_cast<std::size_t>(cur));
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void MainWindow::OnChar(wchar_t ch) {
+    if (ch < 0x20 || ch == 0x7F) {
+        return;
+    }
+    if (!searchFocused_) {
+        if (settings_.behavior.searchActivation != core::SearchActivationMode::TypeToSearch) {
+            return;
+        }
+        searchFocused_ = true;
+        searchCaretIndex_ = searchQueryWide_.size();
+        caretVisible_ = true;
+        SetTimer(hwnd_, kTimerCaret, 530, nullptr);
+    }
+
+    const std::size_t pos = std::min(searchCaretIndex_, searchQueryWide_.size());
+    searchQueryWide_.insert(pos, 1, ch);
+    searchCaretIndex_ = pos + 1;
+    scrollOffsetDip_ = 0.0f;
+    RebuildDisplayedItems();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void MainWindow::OnImeStartComposition() {
+    if (!searchFocused_ &&
+        settings_.behavior.searchActivation == core::SearchActivationMode::TypeToSearch) {
+        searchFocused_ = true;
+        searchCaretIndex_ = searchQueryWide_.size();
+    }
+    UpdateImeCandidateWindowPosition();
+}
+
+void MainWindow::OnImeComposition(LPARAM lParam) {
+    if ((lParam & GCS_COMPSTR) != 0) {
+        HIMC himc = ImmGetContext(hwnd_);
+        if (himc != nullptr) {
+            const LONG byteLen = ImmGetCompositionStringW(himc, GCS_COMPSTR, nullptr, 0);
+            if (byteLen > 0) {
+                std::wstring buf(static_cast<std::size_t>(byteLen) / sizeof(wchar_t), L'\0');
+                ImmGetCompositionStringW(himc, GCS_COMPSTR, buf.data(), static_cast<DWORD>(byteLen));
+                imeCompWide_ = std::move(buf);
+            } else {
+                imeCompWide_.clear();
+            }
+            ImmReleaseContext(hwnd_, himc);
+            UpdateImeCandidateWindowPosition();
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+}
+
+void MainWindow::OnHotKeyTriggered() {
+    if (!IsWindowVisible(hwnd_) && settings_.activation.ignoreWhenFullScreen &&
+        platform::IsForegroundFullScreen(hwnd_)) {
+        return;
+    }
+    ToggleWindow();
+}
+
+void MainWindow::OnTrayIconEvent(LPARAM lParam) {
+    const UINT mouseMsg = static_cast<UINT>(lParam);
+    if (mouseMsg == WM_LBUTTONUP || mouseMsg == WM_LBUTTONDBLCLK) {
+        ToggleWindow();
+    } else if (mouseMsg == WM_RBUTTONUP || mouseMsg == WM_CONTEXTMENU) {
+        inTrayMenu_ = true;
+        const auto cmd = trayIcon_.ShowContextMenu(hwnd_, platform::IsAutoStartEnabled());
+        inTrayMenu_ = false;
+        if (!cmd.has_value()) {
+            return;
+        }
+        switch (*cmd) {
+        case platform::TrayCommand::ToggleWindow:
+            ToggleWindow();
+            break;
+        case platform::TrayCommand::SyncCatalog:
+            SyncAllLinkedFolders(true);
+            break;
+        case platform::TrayCommand::OpenDataDir:
+            (void)platform::OpenDirectoryInExplorer(dataRoot_);
+            break;
+        case platform::TrayCommand::ToggleAutoStart: {
+            const bool next = !platform::IsAutoStartEnabled();
+            if (platform::SetAutoStartEnabled(next)) {
+                settings_.behavior.autoStart = next;
+                ScheduleSaveSettings();
+            }
+            break;
+        }
+        case platform::TrayCommand::Exit:
+            if (hwnd_ != nullptr) {
+                DestroyWindow(hwnd_);
+            }
+            break;
+        }
+    }
+}
+
+void MainWindow::ApplyBackdropAndPalette() {
+    const bool isDark = platform::ResolveIsDark(settings_.appearance.theme);
+    nativeBackdropActive_ = platform::ApplyWindowBackdrop(
+        hwnd_, settings_.appearance.backdrop, isDark, settings_.appearance.cornerRadius);
+    palette_ = BuildThemePalette(settings_.appearance, isDark, nativeBackdropActive_);
+}
+
+void MainWindow::RebuildDisplayedItems() {
+    displayedItems_.clear();
+    if (!searchQueryWide_.empty()) {
+        const std::string queryUtf8 = core::utf8::WideToUtf8(searchQueryWide_);
+        const auto matches = searchEngine_.Search(queryUtf8, 64);
+        for (const auto& match : matches) {
+            for (const auto& grp : catalog_.groups) {
+                if (grp.id != match.groupId) {
+                    continue;
+                }
+                for (const auto& item : grp.items) {
+                    if (item.id == match.itemId) {
+                        displayedItems_.push_back(DisplayedItemView{&item, grp.name});
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    } else if (activeGroupIndex_ < catalog_.groups.size()) {
+        const auto& grp = catalog_.groups[activeGroupIndex_];
+        displayedItems_.reserve(grp.items.size());
+        for (const auto& item : grp.items) {
+            displayedItems_.push_back(DisplayedItemView{&item, grp.name});
+        }
+    }
+
+    if (displayedItems_.empty()) {
+        selectedTileIdx_ = -1;
+    } else if (!searchQueryWide_.empty()) {
+        selectedTileIdx_ = 0;
+    } else if (selectedTileIdx_ >= static_cast<int>(displayedItems_.size())) {
+        selectedTileIdx_ = 0;
+    }
+
+    ResetDefaultStatus();
+}
+
+void MainWindow::SelectGroup(std::size_t index, bool persistSelection) {
+    if (index >= catalog_.groups.size()) {
+        return;
+    }
+    const bool clearedSearch = !searchQueryWide_.empty();
+    activeGroupIndex_ = index;
+    searchQueryWide_.clear();
+    searchCaretIndex_ = 0;
+    scrollOffsetDip_ = 0.0f;
+    selectedTileIdx_ = -1;
+    hoveredTileIdx_ = -1;
+
+    if (persistSelection) {
+        settings_.state.lastSelectedGroupId = catalog_.groups[index].id;
+        ScheduleSaveSettings();
+    }
+    if (clearedSearch) {
+        imeCompWide_.clear();
+    }
+    RebuildDisplayedItems();
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void MainWindow::SwitchGroupByDelta(int delta) {
+    if (catalog_.groups.size() <= 1 || delta == 0) {
+        return;
+    }
+    const int count = static_cast<int>(catalog_.groups.size());
+    const int cur = static_cast<int>(activeGroupIndex_);
+    const int next = ((cur + delta) % count + count) % count;
+    SelectGroup(static_cast<std::size_t>(next), true);
+}
+
+void MainWindow::LaunchDisplayedIndex(std::size_t index) {
+    if (index >= displayedItems_.size() || displayedItems_[index].item == nullptr) {
+        return;
+    }
+    const core::LaunchItem* targetPtr = displayedItems_[index].item;
+    core::LaunchItem* mutableItem = nullptr;
+
+    for (auto& grp : catalog_.groups) {
+        for (auto& it : grp.items) {
+            if (&it == targetPtr) {
+                mutableItem = &it;
+                break;
+            }
+        }
+        if (mutableItem != nullptr) {
+            break;
+        }
+    }
+    if (mutableItem == nullptr) {
+        return;
+    }
+
+    const platform::LaunchResult lr = platform::LaunchCatalogItem(*mutableItem);
+    if (!lr.ok) {
+        statusText_ = "\u542F\u52A8\u5931\u8D25: " + lr.error;
+        if (logger_ != nullptr) {
+            logger_->Warn("Launch failed for '" + mutableItem->name + "': " + lr.error);
+        }
+        InvalidateRect(hwnd_, nullptr, FALSE);
+        return;
+    }
+
+    mutableItem->launchCount += 1;
+    mutableItem->lastLaunchedAt = CurrentUtcIsoTimestamp();
+    if (settings_.behavior.itemSort == core::SortOrder::LaunchCountAsc ||
+        settings_.behavior.itemSort == core::SortOrder::LaunchCountDesc) {
+        for (auto& grp : catalog_.groups) {
+            core::SortItems(grp.items, settings_.behavior.itemSort);
+        }
+    }
+    searchEngine_.Rebuild(catalog_);
+    RebuildDisplayedItems();
+    ScheduleSaveCatalog();
+
+    statusText_ = "\u5DF2\u542F\u52A8: " + mutableItem->name;
+    if (settings_.window.hidePolicy == core::HidePolicy::AfterLaunch) {
+        HideWindow();
+    } else {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void MainWindow::SyncAllLinkedFolders(bool showFeedback) {
+    std::size_t totalAdded = 0;
+    std::size_t totalRemoved = 0;
+    for (auto& grp : catalog_.groups) {
+        if (grp.kind == core::GroupKind::LinkedFolder) {
+            const auto res = core::SyncLinkedFolderGroup(grp);
+            totalAdded += res.added;
+            totalRemoved += res.removed;
+        }
+        core::SortItems(grp.items, settings_.behavior.itemSort);
+    }
+    core::SortGroups(catalog_.groups, settings_.behavior.groupSort);
+    searchEngine_.Rebuild(catalog_);
+    iconCache_.ClearMemoryCache();
+    RebuildDisplayedItems();
+
+    if (totalAdded > 0 || totalRemoved > 0) {
+        ScheduleSaveCatalog();
+    }
+    if (showFeedback) {
+        statusText_ = "\u5DF2\u540C\u6B65\u5173\u8054\u76EE\u5F55 (+" + std::to_string(totalAdded) +
+                      " / -" + std::to_string(totalRemoved) + ")";
+    }
+    if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+}
+
+void MainWindow::UpdateImeCandidateWindowPosition() {
+    if (hwnd_ == nullptr) {
+        return;
+    }
+    HIMC himc = ImmGetContext(hwnd_);
+    if (himc == nullptr) {
+        return;
+    }
+    COMPOSITIONFORM cf{};
+    cf.dwStyle = CFS_POINT;
+    cf.ptCurrentPos.x = core::DipToPhysicalPx(layout_.searchCaretX, dpi_);
+    cf.ptCurrentPos.y =
+        core::DipToPhysicalPx(layout_.searchCaretY + layout_.searchCaretHeight + 4.0f, dpi_);
+    ImmSetCompositionWindow(himc, &cf);
+    ImmReleaseContext(hwnd_, himc);
+}
+
+void MainWindow::EnsureTileVisible(std::size_t tileIndex) {
+    if (tileIndex >= layout_.tileRects.size()) {
+        return;
+    }
+    const RectDip& tile = layout_.tileRects[tileIndex];
+    if (tile.top < layout_.gridViewportRect.top) {
+        scrollOffsetDip_ = std::max(
+            0.0f, scrollOffsetDip_ - (layout_.gridViewportRect.top - tile.top));
+    } else if (tile.bottom > layout_.gridViewportRect.bottom) {
+        scrollOffsetDip_ = std::min(
+            layout_.maxScrollDip,
+            scrollOffsetDip_ + (tile.bottom - layout_.gridViewportRect.bottom));
+    }
+}
+
+void MainWindow::ScheduleSaveSettings() {
+    debouncedWriter_.Schedule(dataRoot_ / L"settings.json", storage::SerializeSettings(settings_),
+                              std::chrono::milliseconds(300));
+}
+
+void MainWindow::ScheduleSaveCatalog() {
+    debouncedWriter_.Schedule(dataRoot_ / L"catalog.json", storage::SerializeCatalog(catalog_),
+                              std::chrono::milliseconds(300));
+}
+
+void MainWindow::ResetDefaultStatus() {
+    const std::string hkBadge =
+        !hotKeyError_.empty()
+            ? "\u70ED\u952E\u51B2\u7A81: " + settings_.activation.hotKey
+            : (settings_.activation.enableHotKey ? ("\u70ED\u952E: " + settings_.activation.hotKey)
+                                                 : std::string("\u70ED\u952E\u5DF2\u5173\u95ED"));
+
+    if (!searchQueryWide_.empty()) {
+        statusText_ = "\u672C\u5730\u641C\u7D22\u547D\u4E2D: " +
+                      std::to_string(displayedItems_.size()) + " \u9879  |  " + hkBadge +
+                      "  |  Esc \u6E05\u7A7A";
+    } else if (activeGroupIndex_ < catalog_.groups.size()) {
+        statusText_ = catalog_.groups[activeGroupIndex_].name + " (" +
+                      std::to_string(displayedItems_.size()) + " \u9879)  |  " + hkBadge;
+    } else {
+        statusText_ = hkBadge;
+    }
+}
+
+void MainWindow::RefreshHooksAndTray() {
+    if (!hooksRegistered_ || hwnd_ == nullptr) {
+        return;
+    }
+    if (settings_.activation.enableMiddleMouse) {
+        (void)mouseHook_.Restart();
+    }
+    if (settings_.activation.enableHotKey && !hotKeyManager_.IsRegistered()) {
+        std::string err;
+        if (hotKeyManager_.Register(hwnd_, settings_.activation.hotKey, err)) {
+            hotKeyError_.clear();
+        } else {
+            hotKeyError_ = err;
+        }
+    }
+    if (settings_.state.showTrayIcon) {
+        trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp");
+    }
+    if (logger_ != nullptr) {
+        logger_->Info("System resume/unlock hook & tray refresh completed");
+    }
+}
+
+float MainWindow::PxToDip(int px) const noexcept {
+    const float safeDpi = static_cast<float>(dpi_ > 0 ? dpi_ : 96u);
+    return static_cast<float>(px) * (96.0f / safeDpi);
+}
+
+int MainWindow::HitTestGroup(float xDip, float yDip) const noexcept {
+    for (std::size_t i = 0; i < layout_.groupRects.size(); ++i) {
+        if (layout_.groupRects[i].Contains(xDip, yDip)) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+int MainWindow::HitTestTile(float xDip, float yDip) const noexcept {
+    if (!layout_.gridViewportRect.Contains(xDip, yDip)) {
+        return -1;
+    }
+    for (std::size_t i = 0; i < layout_.tileRects.size(); ++i) {
+        if (layout_.tileRects[i].Contains(xDip, yDip)) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+HeaderButton MainWindow::HitTestHeaderButton(float xDip, float yDip) const noexcept {
+    for (int i = 0; i < 3; ++i) {
+        if (layout_.headerButtonRects[static_cast<std::size_t>(i)].Contains(xDip, yDip)) {
+            return static_cast<HeaderButton>(i);
+        }
+    }
+    return HeaderButton::None;
+}
+
+} // namespace geekdesk::ui

@@ -37,6 +37,8 @@ add_library(geekdesk_core STATIC
     src/storage/atomic_writer.cpp
     src/storage/backup_manager.cpp
     src/storage/logger.cpp
+    src/ui/theme_palette.cpp
+    src/ui/icon_crop.cpp
 )
 
 target_include_directories(geekdesk_core PUBLIC
@@ -70,12 +72,35 @@ target_link_libraries(geekdesk_core PUBLIC
     advapi32
 )
 
-# Main executable (Phase 1 CLI/bootstrap; Phase 2 adds Win32/D2D UI modules)
+# Main executable (Win32 System Shell + Mode A Direct2D Software MainWindow)
 add_executable(GeekDeskCpp WIN32
     src/main.cpp
+    src/platform/dpi_helper.cpp
+    src/platform/backdrop.cpp
+    src/platform/hotkey_manager.cpp
+    src/platform/mouse_hook.cpp
+    src/platform/fullscreen_detector.cpp
+    src/platform/autostart.cpp
+    src/platform/tray_icon.cpp
+    src/platform/shortcut_resolver.cpp
+    src/platform/shell_launcher.cpp
+    src/platform/single_instance.cpp
+    src/ui/icon_cache.cpp
+    src/ui/d2d_renderer.cpp
+    src/ui/main_window.cpp
     resources/app.rc
 )
-target_link_libraries(GeekDeskCpp PRIVATE geekdesk_core)
+target_link_libraries(GeekDeskCpp PRIVATE
+    geekdesk_core
+    d2d1
+    dwrite
+    windowscodecs
+    imm32
+    wtsapi32
+    shcore
+    uxtheme
+    gdi32
+)
 if(MSVC)
     target_compile_options(GeekDeskCpp PRIVATE /W4 /WX /utf-8 /EHsc)
 elseif(MINGW)

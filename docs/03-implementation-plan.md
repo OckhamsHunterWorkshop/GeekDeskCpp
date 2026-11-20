@@ -9,7 +9,7 @@
 | 阶段 | 核心目标 | 状态 | 关键产出 |
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | 工程脚手架、纯逻辑内核、Schema v1 存储与备份恢复、单元测试、架构文档 | **已完成** | `src/core/*`, `src/storage/*`, `tests/core_tests.cpp`, `docs/*` |
-| **Phase 2** | Win32 外壳（热键/中键/托盘/DWM/启动）+ Direct2D Software 主面板（可看/可用/能搜索/能启动） | 待启动 | `src/platform/*`, `src/ui/*` |
+| **Phase 2** | Win32 外壳（热键/中键/托盘/DWM/启动）+ Direct2D Software 主面板（可看/可用/能搜索/能启动） | **已完成** | `src/platform/*`, `src/ui/*` |
 | **Phase 3** | 完整交互管理（分组/图标 CRUD、拖拽排序、文件夹监听、原生设置与备份恢复 UI） | 待启动 | `src/ui/settings_window.*`, 联动监听与右键菜单 |
 | **Phase 4** | 长稳压测（睡眠唤醒/锁屏/多屏热插拔）、内存与启动审计、便携发行打包 | 待启动 | 发布包与完整回归清单 |
 
@@ -55,7 +55,7 @@ Phase 1 已完整交付以下模块并通过 `doctest` 单元测试与真实目�
 
 ---
 
-## Phase 2：Win32 外壳与 Direct2D Software 主界面（下一步工作）
+## Phase 2：Win32 外壳与 Direct2D Software 主界面（已完成基线）
 
 ### 2.1 待新增模块
 

@@ -13,6 +13,8 @@
 #include "storage/backup_manager.hpp"
 #include "storage/json_codec.hpp"
 #include "storage/logger.hpp"
+#include "ui/icon_crop.hpp"
+#include "ui/theme_palette.hpp"
 
 #include <windows.h>
 
@@ -493,4 +495,94 @@ TEST_CASE("file logger supports concurrent UTF-8 writes and flush") {
         }
     }
     CHECK(lines == 100);
+}
+
+TEST_CASE("theme palette maps backgroundOpacity, cardOpacity, and readable contrast") {
+    using namespace geekdesk::ui;
+
+    CHECK(ParseHexColor("#2563EB").b == doctest::Approx(235.0f / 255.0f));
+    CHECK(ParseHexColor("#FFF").r == doctest::Approx(1.0f));
+    const ColorRgba fallback{0.1f, 0.2f, 0.3f, 0.4f};
+    CHECK(ParseHexColor("not-a-color", fallback) == fallback);
+
+    AppearanceSettings app;
+    app.backdrop = BackdropMode::Acrylic;
+    app.backgroundOpacity = 0.0;
+    app.cardOpacity = 0.05;
+    const ThemePalette low = BuildThemePalette(app, true, true);
+
+    app.backgroundOpacity = 1.0;
+    app.cardOpacity = 0.85;
+    const ThemePalette high = BuildThemePalette(app, true, true);
+
+    CHECK(low.useNativeBackdrop);
+    CHECK(high.windowTint.a > low.windowTint.a + 0.5f);
+    CHECK(high.contentCardBg.a > low.contentCardBg.a + 0.5f);
+
+    // Fallback when DWM native backdrop is unavailable (e.g. Win10 / Gradient)
+    const ThemePalette win10Fallback = BuildThemePalette(app, true, false);
+    CHECK_FALSE(win10Fallback.useNativeBackdrop);
+    CHECK(win10Fallback.windowTint.a == doctest::Approx(1.0f));
+
+    // Light theme keeps dark text when textColor is still stock white default
+    app.textColor = "#FFFFFF";
+    const ThemePalette lightDefault = BuildThemePalette(app, false, true);
+    CHECK(lightDefault.textPrimary.r < 0.2f);
+
+    app.textColor = "#FF5500";
+    const ThemePalette lightCustom = BuildThemePalette(app, false, true);
+    CHECK(lightCustom.textPrimary.r == doctest::Approx(1.0f));
+}
+
+TEST_CASE("icon cropper removes faint Shell outer rims separated by transparent moat") {
+    using namespace geekdesk::ui;
+
+    auto makeCanvas = [](int w, int h) {
+        BgraImage img;
+        img.width = w;
+        img.height = h;
+        img.pixels.assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4u, 0);
+        return img;
+    };
+    auto setAlpha = [](BgraImage& img, int x, int y, std::uint8_t a) {
+        const auto off = static_cast<std::size_t>((y * img.width + x) * 4);
+        img.pixels[off + 0] = a;
+        img.pixels[off + 1] = a;
+        img.pixels[off + 2] = a;
+        img.pixels[off + 3] = a;
+    };
+
+    // 1. 128x128 icon with faint 3px outer border + transparent moat at ringOffset=6 + 64x64 inner icon
+    BgraImage rimmed = makeCanvas(128, 128);
+    for (int i = 0; i < 128; ++i) {
+        for (int b = 0; b < 3; ++b) {
+            setAlpha(rimmed, i, b, 70);
+            setAlpha(rimmed, i, 127 - b, 70);
+            setAlpha(rimmed, b, i, 70);
+            setAlpha(rimmed, 127 - b, i, 70);
+        }
+    }
+    for (int y = 32; y < 96; ++y) {
+        for (int x = 32; x < 96; ++x) {
+            setAlpha(rimmed, x, y, 255);
+        }
+    }
+    CHECK(HasTransparentMoat(rimmed, 6));
+    const BgraImage croppedRim = TrimIconPadding(rimmed);
+    CHECK(croppedRim.IsValid());
+    CHECK(croppedRim.width <= 74);
+    CHECK(croppedRim.height <= 74);
+    CHECK(croppedRim.width >= 64);
+
+    // 2. Full-bleed 128x128 artwork (120x120) must NOT be shrunk/cropped
+    BgraImage fullBleed = makeCanvas(128, 128);
+    for (int y = 4; y < 124; ++y) {
+        for (int x = 4; x < 124; ++x) {
+            setAlpha(fullBleed, x, y, 255);
+        }
+    }
+    CHECK_FALSE(HasTransparentMoat(fullBleed, 6));
+    const BgraImage keptFull = TrimIconPadding(fullBleed);
+    CHECK(keptFull.width == 128);
+    CHECK(keptFull.height == 128);
 }

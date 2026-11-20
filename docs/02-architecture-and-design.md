@@ -49,6 +49,7 @@ flowchart TD
        0, 0, D2D1_RENDER_TARGET_USAGE_NONE, D2D1_FEATURE_LEVEL_DEFAULT);
    ```
    将渲染目标 `ID2D1DCRenderTarget` 绑定到 `BeginPaint` 的 `HDC`（或内存兼容 DC + `BitBlt` 双缓冲以消除闪烁）。
+   > 注：在 Windows 10/11 上，`d2d1.dll` 内部执行 `D2D1_RENDER_TARGET_TYPE_SOFTWARE` 时会按需加载系统软件光栅器 `D3D10Warp.dll`（连带 `d3d11.dll`/`dxgi.dll` 接口壳），但**不会初始化任何硬件 GPU 用户态驱动**（实测私有提交内存 `Private Bytes` 仅约 **8.5 MB**）。
 3. **透明通道（Premultiplied Alpha）合成规范（极其重要！）**：
    - DWM Backdrop 窗口要求客户端画布上的透明区域真正把 Alpha 写为 `< 1.0`。
    - **Wallpaper / Gradient 模式**：背景遮罩采用 `1.0` 全不透明绘制（先画壁纸/渐变，再叠加半透明暗色/亮色遮罩）。

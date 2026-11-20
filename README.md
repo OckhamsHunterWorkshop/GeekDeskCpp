@@ -10,7 +10,7 @@
 ## 项目现状与实施阶段
 
 - [x] **Phase 1 — 工程底座、核心逻辑、Schema v1 兼容存储、备份恢复与自动化测试**（已完成）
-- [ ] **Phase 2 — Win32 系统外壳（DWM 材质 / 热键 / 中键钩子 / 托盘 / 启动器）与 Direct2D Software 主面板**
+- [x] **Phase 2 — Win32 系统外壳（DWM 材质 / 热键 / 中键钩子 / 托盘 / 启动器）与 Direct2D Software 主面板**（已完成）
 - [ ] **Phase 3 — 完整交互编辑（分组/条目增删改、拖拽排序、文件夹监听、原生设置与备份恢复界面）**
 - [ ] **Phase 4 — 长稳压测、内存/冷启动审计与便携发行打包**
 
@@ -41,6 +41,10 @@ ctest --preset mingw-release --output-on-failure
 
 # 3. 使用现有 GeekDeskNext 数据目录进行只读兼容性校验
 .\build\mingw-release\GeekDeskCpp.exe --verify-data "I:\tools\GeekDeskNext\data" | Out-String
+
+# 4. 运行 Mode A 窗口渲染烟雾自检或指定数据目录启动桌面主界面
+.\build\mingw-release\GeekDeskCpp.exe --smoke-ui --data-dir "<temp-data-dir>" | Out-String
+.\build\mingw-release\GeekDeskCpp.exe --data-dir "<your-data-dir>"
 ```
 
 若使用 MSVC 工具链（需在 VS Developer PowerShell 中执行）：
