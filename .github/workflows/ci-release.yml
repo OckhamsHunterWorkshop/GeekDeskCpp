@@ -1,0 +1,71 @@
+name: Build, Test & Release (Win64 Portable)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-win64:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MinGW-w64 UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-binutils
+
+      - name: Determine package version
+        id: ver
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ("${{ github.ref_type }}" -eq "tag" -and $tag.StartsWith("v")) {
+            $v = $tag.Substring(1)
+            $pre = $v.Contains("-") ? "true" : "false"
+          } else {
+            $v = "0.1.0-ci"
+            $pre = "true"
+          }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "prerelease=$pre" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Build, test, audit, soak-check & package
+        run: |
+          $env:Path = "C:\msys64\ucrt64\bin;$env:Path"
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps1 -Version "${{ steps.ver.outputs.version }}"
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GeekDeskCpp-v${{ steps.ver.outputs.version }}-win64-portable
+          path: |
+            dist/GeekDeskCpp-v${{ steps.ver.outputs.version }}-win64-portable.zip
+            dist/GeekDeskCpp-v${{ steps.ver.outputs.version }}-win64-portable.zip.sha256
+
+      - name: Publish GitHub Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ steps.ver.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            dist/GeekDeskCpp-v${{ steps.ver.outputs.version }}-win64-portable.zip
+            dist/GeekDeskCpp-v${{ steps.ver.outputs.version }}-win64-portable.zip.sha256
