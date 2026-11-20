@@ -112,17 +112,19 @@ struct BehaviorSettings {
 };
 
 struct AppearanceSettings {
-    ThemeMode theme = ThemeMode::System;
-    BackdropMode backdrop = BackdropMode::Mica;
+    ThemeMode theme = ThemeMode::Dark;
+    BackdropMode backdrop = BackdropMode::Acrylic;
     std::optional<std::string> wallpaperFileName;
     bool wallpaperBlurEnabled = true;
     std::string gradientColor1 = "#2563EB";
     std::string gradientColor2 = "#0F172A";
-    double backgroundOpacity = 1.0;
-    double cardOpacity = 0.15;
-    int cornerRadius = 12;
-    int iconSize = 48;
+    double backgroundOpacity = 0.80;
+    double cardOpacity = 0.50;
+    int cornerRadius = 4;
+    int iconSize = 56;
     bool showItemTitle = true;
+    int fontSize = 12;
+    std::string fontFamily = "Microsoft YaHei UI";
     std::string textColor = "#FFFFFF";
 };
 

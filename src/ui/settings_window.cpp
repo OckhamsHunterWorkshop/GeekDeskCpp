@@ -146,7 +146,7 @@ void SettingsWindow::OpenOrActivate(HINSTANCE hInstance,
                              : platform::GetMonitorMetricsForPoint(POINT{0, 0});
     dpi_ = metrics.dpi;
     const int winW = ScalePx(580, dpi_);
-    const int winH = ScalePx(560, dpi_);
+    const int winH = ScalePx(620, dpi_);
     const auto pos = core::ComputeCenteredPosition(winW, winH, metrics.workArea);
 
     hwnd_ = CreateWindowExW(0, kSettingsClassName,
@@ -347,6 +347,11 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             working_.appearance.cornerRadius = v;
             RefreshSliderLabels();
             EmitSettingsChanged();
+        } else if (src == fontSizeSlider_) {
+            const int v = static_cast<int>(SendMessageW(fontSizeSlider_, TBM_GETPOS, 0, 0));
+            working_.appearance.fontSize = v;
+            RefreshSliderLabels();
+            EmitSettingsChanged();
         }
         return 0;
     }
@@ -391,6 +396,18 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 working_.appearance.backdrop =
                     static_cast<core::BackdropMode>(std::clamp(sel, 0, 4));
                 EmitSettingsChanged();
+            } else if (id == kIdFontFamilyCombo) {
+                const int sel = static_cast<int>(SendMessageW(fontFamilyCombo_, CB_GETCURSEL, 0, 0));
+                if (sel >= 0) {
+                    wchar_t buf[128]{};
+                    SendMessageW(fontFamilyCombo_, CB_GETLBTEXT, static_cast<WPARAM>(sel),
+                                 reinterpret_cast<LPARAM>(buf));
+                    const std::string fam = core::utf8::WideToUtf8(buf);
+                    if (!fam.empty()) {
+                        working_.appearance.fontFamily = fam;
+                        EmitSettingsChanged();
+                    }
+                }
             } else if (id == kIdHidePolicyCombo) {
                 const int sel = static_cast<int>(SendMessageW(hidePolicyCombo_, CB_GETCURSEL, 0, 0));
                 working_.window.hidePolicy =
@@ -708,6 +725,23 @@ void SettingsWindow::BuildControls() {
     makeSliderRow(L"\u7A97\u53E3\u5706\u89D2:", kIdCornerRadiusSlider, kIdCornerRadiusVal, 0, 24, 4,
                   cornerSlider_, cornerVal_);
 
+    addLabel(0, L"\u754C\u9762\u5B57\u4F53:", px, y0 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    fontFamilyCombo_ = addToTab(
+        0, CreateWindowExW(0, L"COMBOBOX", nullptr, WS_CHILD | WS_TABSTOP | CBS_DROPDOWNLIST,
+                           ctrlX, y0, ScalePx(220, dpi_), ScalePx(180, dpi_), hwnd_,
+                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdFontFamilyCombo)), hInst,
+                           nullptr));
+    const wchar_t* kFonts[] = {
+        L"Microsoft YaHei UI", L"Segoe UI", L"SimHei", L"KaiTi", L"FangSong", L"Consolas",
+    };
+    for (const wchar_t* fn : kFonts) {
+        SendMessageW(fontFamilyCombo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(fn));
+    }
+    y0 += rowH + gap;
+
+    makeSliderRow(L"\u5B57\u4F53\u5927\u5C0F:", kIdFontSizeSlider, kIdFontSizeVal, 10, 20, 2,
+                  fontSizeSlider_, fontSizeVal_);
+
     const int boxSz = ScalePx(18, dpi_);
     showTitleCheck_ = addToTab(
         0, CreateWindowExW(0, L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, ctrlX,
@@ -951,6 +985,19 @@ void SettingsWindow::PopulateFromSettings() {
                  static_cast<LPARAM>(std::clamp(working_.appearance.iconSize, 32, 80)));
     SendMessageW(cornerSlider_, TBM_SETPOS, TRUE,
                  static_cast<LPARAM>(std::clamp(working_.appearance.cornerRadius, 0, 24)));
+    {
+        const std::wstring wFam = core::utf8::Utf8ToWide(working_.appearance.fontFamily);
+        int idx = static_cast<int>(SendMessageW(
+            fontFamilyCombo_, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1),
+            reinterpret_cast<LPARAM>(wFam.c_str())));
+        if (idx == CB_ERR && !wFam.empty()) {
+            idx = static_cast<int>(SendMessageW(fontFamilyCombo_, CB_ADDSTRING, 0,
+                                                reinterpret_cast<LPARAM>(wFam.c_str())));
+        }
+        SendMessageW(fontFamilyCombo_, CB_SETCURSEL, (idx != CB_ERR) ? idx : 0, 0);
+    }
+    SendMessageW(fontSizeSlider_, TBM_SETPOS, TRUE,
+                 static_cast<LPARAM>(std::clamp(working_.appearance.fontSize, 10, 20)));
     SendMessageW(showTitleCheck_, BM_SETCHECK,
                  working_.appearance.showItemTitle ? BST_CHECKED : BST_UNCHECKED, 0);
     SetWindowTextW(wallpaperLabel_,
@@ -996,6 +1043,7 @@ void SettingsWindow::RefreshSliderLabels() {
     SetWindowTextW(cardOpacityVal_, (std::to_wstring(cardPct) + L"%").c_str());
     SetWindowTextW(iconSizeVal_, (std::to_wstring(working_.appearance.iconSize) + L" px").c_str());
     SetWindowTextW(cornerVal_, (std::to_wstring(working_.appearance.cornerRadius) + L" px").c_str());
+    SetWindowTextW(fontSizeVal_, (std::to_wstring(working_.appearance.fontSize) + L" px").c_str());
 }
 
 void SettingsWindow::RefreshHotKeyHint() {

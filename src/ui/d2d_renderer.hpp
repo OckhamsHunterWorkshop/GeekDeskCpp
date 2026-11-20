@@ -146,6 +146,7 @@ public:
 
 private:
     bool EnsureFactories();
+    bool EnsureTextFormats(std::string_view fontFamily, int fontSize);
     bool EnsureRenderTarget(std::uint32_t dpi);
     bool EnsureBackBuffer(HDC referenceDc, int widthPx, int heightPx);
     void DiscardTargetAndBitmaps();
@@ -190,6 +191,9 @@ private:
     std::string cachedDesktopWallpaperKey_;
     platform::ComPtr<ID2D1Bitmap> desktopMicaBitmap_;
     bool desktopMicaLoadAttempted_ = false;
+
+    std::string cachedFontFamily_;
+    int cachedFontSize_ = 0;
 };
 
 } // namespace geekdesk::ui

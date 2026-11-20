@@ -206,6 +206,8 @@ void D2DRenderer::Shutdown() {
     countFmt_.Reset();
     groupFmt_.Reset();
     brandFmt_.Reset();
+    cachedFontFamily_.clear();
+    cachedFontSize_ = 0;
     dwriteFactory_.Reset();
     factory_.Reset();
 }
@@ -224,14 +226,29 @@ bool D2DRenderer::EnsureFactories() {
             return false;
         }
     }
+    return EnsureTextFormats("Microsoft YaHei UI", 12);
+}
 
-    auto makeFmt = [this](platform::ComPtr<IDWriteTextFormat>& out, float size,
-                          DWRITE_FONT_WEIGHT weight, DWRITE_TEXT_ALIGNMENT hAlign,
-                          DWRITE_PARAGRAPH_ALIGNMENT vAlign, bool wrap, bool ellipsis) {
-        if (out) {
-            return true;
-        }
-        if (FAILED(dwriteFactory_->CreateTextFormat(L"Microsoft YaHei UI", nullptr, weight,
+bool D2DRenderer::EnsureTextFormats(std::string_view fontFamily, int fontSize) {
+    if (!dwriteFactory_) {
+        return false;
+    }
+    const int clampedSize = std::clamp(fontSize, 10, 20);
+    const std::string_view trimmed = core::utf8::TrimAscii(fontFamily);
+    const std::string family = trimmed.empty() ? std::string("Microsoft YaHei UI")
+                                               : std::string(trimmed);
+    if (brandFmt_ && cachedFontSize_ == clampedSize && cachedFontFamily_ == family) {
+        return true;
+    }
+
+    const std::wstring wFamily = core::utf8::Utf8ToWide(family);
+    const float base = static_cast<float>(clampedSize);
+
+    auto makeFmt = [this, &wFamily](platform::ComPtr<IDWriteTextFormat>& out, float size,
+                                    DWRITE_FONT_WEIGHT weight, DWRITE_TEXT_ALIGNMENT hAlign,
+                                    DWRITE_PARAGRAPH_ALIGNMENT vAlign, bool wrap, bool ellipsis) {
+        out.Reset();
+        if (FAILED(dwriteFactory_->CreateTextFormat(wFamily.c_str(), nullptr, weight,
                                                     DWRITE_FONT_STYLE_NORMAL,
                                                     DWRITE_FONT_STRETCH_NORMAL, size, L"zh-CN",
                                                     out.ReleaseAndGetAddressOf()))) {
@@ -253,22 +270,28 @@ bool D2DRenderer::EnsureFactories() {
         return true;
     };
 
-    return makeFmt(brandFmt_, 14.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
-           makeFmt(groupFmt_, 13.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
-           makeFmt(countFmt_, 11.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_TRAILING,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
-           makeFmt(searchFmt_, 13.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
-           makeFmt(itemTitleFmt_, 12.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
-                   DWRITE_PARAGRAPH_ALIGNMENT_NEAR, true, true) &&
-           makeFmt(badgeFmt_, 18.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
-           makeFmt(statusFmt_, 11.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
-           makeFmt(emptyFmt_, 14.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
-                   DWRITE_PARAGRAPH_ALIGNMENT_CENTER, true, false);
+    const bool ok =
+        makeFmt(brandFmt_, base + 2.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
+        makeFmt(groupFmt_, base + 1.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
+        makeFmt(countFmt_, std::max(10.0f, base - 1.0f), DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
+        makeFmt(searchFmt_, base + 1.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
+        makeFmt(itemTitleFmt_, base, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
+                DWRITE_PARAGRAPH_ALIGNMENT_NEAR, true, true) &&
+        makeFmt(badgeFmt_, 18.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
+        makeFmt(statusFmt_, std::max(10.0f, base - 1.0f), DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
+        makeFmt(emptyFmt_, base + 2.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, true, false);
+    if (ok) {
+        cachedFontFamily_ = family;
+        cachedFontSize_ = clampedSize;
+    }
+    return ok;
 }
 
 bool D2DRenderer::EnsureRenderTarget(std::uint32_t dpi) {
@@ -453,9 +476,10 @@ LayoutSnapshot D2DRenderer::ComputeLayout(const core::AppSettings& settings,
                              snap.contentCardRect.bottom - gridPad};
 
     const float iconSize = static_cast<float>(std::clamp(settings.appearance.iconSize, 28, 96));
+    const float fontSizeDip = static_cast<float>(std::clamp(settings.appearance.fontSize, 10, 20));
     const float tileW = iconSize + 40.0f;
-    const float tileH =
-        settings.appearance.showItemTitle ? (iconSize + 44.0f) : (iconSize + 20.0f);
+    const float tileH = settings.appearance.showItemTitle ? (iconSize + fontSizeDip * 2.2f + 18.0f)
+                                                          : (iconSize + 20.0f);
     snap.rowStrideDip = tileH + kGridGap;
 
     const int cols = core::ComputeGridColumns(
@@ -641,7 +665,9 @@ bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
         return false;
     }
 
-    if (!EnsureRenderTarget(dpi) || !EnsureBackBuffer(screenDc.hdc, widthPx, heightPx)) {
+    if (!EnsureRenderTarget(dpi) || !EnsureBackBuffer(screenDc.hdc, widthPx, heightPx) ||
+        !EnsureTextFormats(state.settings->appearance.fontFamily,
+                           state.settings->appearance.fontSize)) {
         return false;
     }
 

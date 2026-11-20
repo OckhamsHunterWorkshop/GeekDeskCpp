@@ -4,6 +4,7 @@
 
 #include <yyjson.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <memory>
 
@@ -140,6 +141,8 @@ void WriteSettingsObject(yyjson_mut_doc* doc,
     yyjson_mut_obj_add_int(doc, app, "cornerRadius", settings.appearance.cornerRadius);
     yyjson_mut_obj_add_int(doc, app, "iconSize", settings.appearance.iconSize);
     yyjson_mut_obj_add_bool(doc, app, "showItemTitle", settings.appearance.showItemTitle);
+    yyjson_mut_obj_add_int(doc, app, "fontSize", settings.appearance.fontSize);
+    AddStr(doc, app, "fontFamily", settings.appearance.fontFamily);
     AddStr(doc, app, "textColor", settings.appearance.textColor);
     yyjson_mut_obj_add_val(doc, root, "appearance", app);
 
@@ -215,6 +218,12 @@ bool ParseSettingsObject(yyjson_val* root,
         ReadInt(app, "cornerRadius", out.appearance.cornerRadius);
         ReadInt(app, "iconSize", out.appearance.iconSize);
         ReadBool(app, "showItemTitle", out.appearance.showItemTitle);
+        ReadInt(app, "fontSize", out.appearance.fontSize);
+        out.appearance.fontSize = std::clamp(out.appearance.fontSize, 10, 20);
+        ReadString(app, "fontFamily", out.appearance.fontFamily);
+        if (core::utf8::TrimAscii(out.appearance.fontFamily).empty()) {
+            out.appearance.fontFamily = "Microsoft YaHei UI";
+        }
         ReadString(app, "textColor", out.appearance.textColor);
     }
 

@@ -78,6 +78,9 @@ private:
         kIdIconSizeVal,
         kIdCornerRadiusSlider,
         kIdCornerRadiusVal,
+        kIdFontFamilyCombo,
+        kIdFontSizeSlider,
+        kIdFontSizeVal,
         kIdShowTitleCheck,
         kIdWallpaperLabel,
         kIdPickWallpaperBtn,
@@ -141,6 +144,9 @@ private:
     HWND iconSizeVal_ = nullptr;
     HWND cornerSlider_ = nullptr;
     HWND cornerVal_ = nullptr;
+    HWND fontFamilyCombo_ = nullptr;
+    HWND fontSizeSlider_ = nullptr;
+    HWND fontSizeVal_ = nullptr;
     HWND showTitleCheck_ = nullptr;
     HWND wallpaperLabel_ = nullptr;
 

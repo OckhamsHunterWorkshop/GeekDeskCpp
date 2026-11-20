@@ -161,10 +161,15 @@ ThemePalette BuildThemePalette(const core::AppearanceSettings& app,
         p.badgeText = RgbaByte(255, 255, 255, 1.0f);
     }
 
-    // Apply custom user textColor unless it is the stock white default while running Light theme.
-    const std::string textUpper = core::utf8::ToLowerAscii(core::utf8::TrimAscii(app.textColor));
-    if (!textUpper.empty() && !(!isDark && (textUpper == "#ffffff" || textUpper == "#fff"))) {
-        p.textPrimary = ParseHexColor(app.textColor, p.textPrimary);
+    // Apply custom user textColor only when it preserves readable contrast for the active theme.
+    // Prevents migrated Light-mode "#000000" from making Dark-mode text unreadable (and vice versa).
+    const std::string textTrimmed = core::utf8::ToLowerAscii(core::utf8::TrimAscii(app.textColor));
+    if (!textTrimmed.empty()) {
+        const ColorRgba custom = ParseHexColor(textTrimmed, p.textPrimary);
+        const float lum = 0.2126f * custom.r + 0.7152f * custom.g + 0.0722f * custom.b;
+        if ((isDark && lum >= 0.45f) || (!isDark && lum <= 0.65f)) {
+            p.textPrimary = custom;
+        }
     }
 
     p.gradientStart = ParseHexColor(app.gradientColor1, RgbaByte(37, 99, 235, 1.0f));

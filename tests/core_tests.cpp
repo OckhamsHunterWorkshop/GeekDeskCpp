@@ -307,6 +307,8 @@ TEST_CASE("json codec round-trips Schema v1, ignores deprecated Everything field
     s.appearance.theme = ThemeMode::Dark;
     s.appearance.backdrop = BackdropMode::Acrylic;
     s.appearance.wallpaperFileName = "bg.png";
+    s.appearance.fontSize = 15;
+    s.appearance.fontFamily = "Segoe UI";
     s.state.lastSelectedGroupId = "group-123";
 
     const std::string sJson = SerializeSettings(s);
@@ -319,6 +321,8 @@ TEST_CASE("json codec round-trips Schema v1, ignores deprecated Everything field
     CHECK(sParsed.value.appearance.theme == ThemeMode::Dark);
     CHECK(sParsed.value.appearance.backdrop == BackdropMode::Acrylic);
     CHECK(sParsed.value.appearance.wallpaperFileName == "bg.png");
+    CHECK(sParsed.value.appearance.fontSize == 15);
+    CHECK(sParsed.value.appearance.fontFamily == "Segoe UI");
     CHECK(sParsed.value.state.lastSelectedGroupId == "group-123");
 
     // Deprecated enableExternalEverything field + BOM + trailing comma tolerated
@@ -543,6 +547,13 @@ TEST_CASE("theme palette maps backgroundOpacity, cardOpacity, and readable contr
     const ThemePalette win10Fallback = BuildThemePalette(app, true, false);
     CHECK_FALSE(win10Fallback.useNativeBackdrop);
     CHECK(win10Fallback.windowTint.a == doctest::Approx(1.0f));
+
+    // Dark theme forces readable white text even if migrated settings had "#000000"
+    app.textColor = "#000000";
+    const ThemePalette darkMigratedBlack = BuildThemePalette(app, true, true);
+    CHECK(darkMigratedBlack.textPrimary.r > 0.9f);
+    CHECK(darkMigratedBlack.textPrimary.g > 0.9f);
+    CHECK(darkMigratedBlack.textPrimary.b > 0.9f);
 
     // Light theme keeps dark text when textColor is still stock white default
     app.textColor = "#FFFFFF";
