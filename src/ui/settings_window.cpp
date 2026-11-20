@@ -199,6 +199,32 @@ void SettingsWindow::RebuildThemeBrushes() {
     }
     bgBrush_ = CreateSolidBrush(bgColor_);
     editBrush_ = CreateSolidBrush(editColor_);
+    ApplyChildThemes();
+}
+
+void SettingsWindow::ApplyChildThemes() {
+    if (hwnd_ == nullptr) {
+        return;
+    }
+    struct ThemeCtx {
+        bool dark;
+    } ctx{isDark_};
+    EnumChildWindows(
+        hwnd_,
+        [](HWND ch, LPARAM lp) -> BOOL {
+            const auto* c = reinterpret_cast<const ThemeCtx*>(lp);
+            wchar_t cls[32]{};
+            GetClassNameW(ch, cls, static_cast<int>(std::size(cls)));
+            const std::wstring_view clsView(cls);
+            if (clsView == L"ComboBox") {
+                SetWindowTheme(ch, c->dark ? L"DarkMode_CFD" : L"Explorer", nullptr);
+            } else {
+                SetWindowTheme(ch, c->dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+            }
+            InvalidateRect(ch, nullptr, TRUE);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&ctx));
 }
 
 LRESULT CALLBACK SettingsWindow::StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -219,6 +245,63 @@ LRESULT CALLBACK SettingsWindow::StaticWndProc(HWND hwnd, UINT msg, WPARAM wPara
 
 LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+    case WM_ERASEBKGND:
+        if (bgBrush_ != nullptr) {
+            RECT rc{};
+            GetClientRect(hwnd_, &rc);
+            FillRect(reinterpret_cast<HDC>(wParam), &rc, bgBrush_);
+            return 1;
+        }
+        break;
+
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(hwnd_, &ps);
+        if (hdc != nullptr) {
+            RECT rc{};
+            GetClientRect(hwnd_, &rc);
+            const int pad = ScalePx(12, dpi_);
+            const int lineY = pad + ScalePx(36, dpi_);
+            const RECT lineRect{pad, lineY, rc.right - pad, lineY + 1};
+            HBRUSH div = CreateSolidBrush(isDark_ ? RGB(56, 60, 74) : RGB(214, 218, 228));
+            FillRect(hdc, &lineRect, div);
+            DeleteObject(div);
+        }
+        EndPaint(hwnd_, &ps);
+        return 0;
+    }
+
+    case WM_DRAWITEM: {
+        const auto* dis = reinterpret_cast<const DRAWITEMSTRUCT*>(lParam);
+        if (dis != nullptr && (dis->CtlID == kIdTab0 || dis->CtlID == kIdTab1 || dis->CtlID == kIdTab2)) {
+            const int idx = static_cast<int>(dis->CtlID - kIdTab0);
+            const bool active = (idx == activeTab_);
+            const COLORREF fillClr =
+                active ? (isDark_ ? RGB(42, 46, 58) : RGB(255, 255, 255)) : bgColor_;
+            HBRUSH fillBr = CreateSolidBrush(fillClr);
+            FillRect(dis->hDC, &dis->rcItem, fillBr);
+            DeleteObject(fillBr);
+
+            if (active) {
+                RECT bar = dis->rcItem;
+                bar.top = bar.bottom - ScalePx(3, dpi_);
+                HBRUSH accBr = CreateSolidBrush(RGB(59, 130, 246));
+                FillRect(dis->hDC, &bar, accBr);
+                DeleteObject(accBr);
+            }
+
+            wchar_t text[64]{};
+            GetWindowTextW(dis->hwndItem, text, static_cast<int>(std::size(text)));
+            SetBkMode(dis->hDC, TRANSPARENT);
+            SetTextColor(dis->hDC, active ? textColor_
+                                          : (isDark_ ? RGB(164, 170, 184) : RGB(96, 106, 124)));
+            RECT txtRc = dis->rcItem;
+            DrawTextW(dis->hDC, text, -1, &txtRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
+        break;
+    }
+
     case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN: {
@@ -233,15 +316,6 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         SetTextColor(hdc, textColor_);
         SetBkColor(hdc, editColor_);
         return reinterpret_cast<LRESULT>(editBrush_);
-    }
-
-    case WM_NOTIFY: {
-        const auto* hdr = reinterpret_cast<const NMHDR*>(lParam);
-        if (hdr != nullptr && hdr->idFrom == kIdTab && hdr->code == TCN_SELCHANGE) {
-            const int sel = static_cast<int>(SendMessageW(tabCtrl_, TCM_GETCURSEL, 0, 0));
-            SwitchTab(sel);
-        }
-        return 0;
     }
 
     case WM_HSCROLL: {
@@ -282,6 +356,21 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         if (id == kIdCloseBtn) {
             DestroyWindow(hwnd_);
+            return 0;
+        }
+        if (id == kIdTab0 || id == kIdTab1 || id == kIdTab2) {
+            SwitchTab(id - kIdTab0);
+            return 0;
+        }
+        // Clicking the static label paired with a checkbox toggles the checkbox cleanly
+        if (code == STN_CLICKED && id >= 5000 && id < 5100) {
+            const int checkId = id - 1000;
+            if (HWND cb = GetDlgItem(hwnd_, checkId); cb != nullptr) {
+                const bool wasChecked = (SendMessageW(cb, BM_GETCHECK, 0, 0) == BST_CHECKED);
+                SendMessageW(cb, BM_SETCHECK, wasChecked ? BST_UNCHECKED : BST_CHECKED, 0);
+                SendMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(checkId, BN_CLICKED),
+                             reinterpret_cast<LPARAM>(cb));
+            }
             return 0;
         }
 
@@ -522,36 +611,25 @@ void SettingsWindow::BuildControls() {
     GetClientRect(hwnd_, &rc);
     const int cw = rc.right - rc.left;
     const int ch = rc.bottom - rc.top;
-    const int pad = ScalePx(12, dpi_);
-    const int bottomBarH = ScalePx(44, dpi_);
+    const int pad = ScalePx(14, dpi_);
+    const int tabH = ScalePx(34, dpi_);
+    const int tabW = (cw - pad * 2) / 3;
 
-    tabCtrl_ = CreateWindowExW(
-        0, WC_TABCONTROLW, nullptr, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_TABS, pad, pad,
-        cw - pad * 2, ch - pad * 2 - bottomBarH, hwnd_,
-        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdTab)), hInst, nullptr);
-
-    auto insertTab = [this](int idx, wchar_t* text) {
-        TCITEMW tie{};
-        tie.mask = TCIF_TEXT;
-        tie.pszText = text;
-        SendMessageW(tabCtrl_, TCM_INSERTITEMW, static_cast<WPARAM>(idx),
-                     reinterpret_cast<LPARAM>(&tie));
+    const wchar_t* tabLabels[3] = {
+        L"\u5916\u89C2\u4E0E\u6750\u8D28",
+        L"\u547C\u51FA\u4E0E\u884C\u4E3A",
+        L"\u6570\u636E\u4E0E\u5907\u4EFD\u6062\u590D",
     };
-    wchar_t t0[] = L"\u5916\u89C2\u4E0E\u6750\u8D28";
-    wchar_t t1[] = L"\u547C\u51FA\u4E0E\u884C\u4E3A";
-    wchar_t t2[] = L"\u6570\u636E\u4E0E\u5907\u4EFD\u6062\u590D";
-    insertTab(0, t0);
-    insertTab(1, t1);
-    insertTab(2, t2);
+    for (int i = 0; i < 3; ++i) {
+        tabButtons_[i] = CreateWindowExW(
+            0, L"BUTTON", tabLabels[i], WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
+            pad + i * tabW, pad, (i == 2) ? (cw - pad * 2 - tabW * 2) : tabW, tabH, hwnd_,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdTab0 + i)), hInst, nullptr);
+    }
 
-    RECT pageRect{};
-    GetWindowRect(tabCtrl_, &pageRect);
-    MapWindowPoints(HWND_DESKTOP, hwnd_, reinterpret_cast<LPPOINT>(&pageRect), 2);
-    SendMessageW(tabCtrl_, TCM_ADJUSTRECT, FALSE, reinterpret_cast<LPARAM>(&pageRect));
-
-    const int px = pageRect.left + ScalePx(14, dpi_);
-    const int py = pageRect.top + ScalePx(12, dpi_);
-    const int pw = (pageRect.right - pageRect.left) - ScalePx(28, dpi_);
+    const int px = pad + ScalePx(8, dpi_);
+    const int py = pad + tabH + ScalePx(16, dpi_);
+    const int pw = cw - px * 2;
     const int labelW = ScalePx(130, dpi_);
     const int ctrlX = px + labelW + ScalePx(8, dpi_);
     const int ctrlW = pw - labelW - ScalePx(8, dpi_);
@@ -626,12 +704,19 @@ void SettingsWindow::BuildControls() {
     makeSliderRow(L"\u7A97\u53E3\u5706\u89D2:", kIdCornerRadiusSlider, kIdCornerRadiusVal, 0, 24, 4,
                   cornerSlider_, cornerVal_);
 
+    const int boxSz = ScalePx(18, dpi_);
     showTitleCheck_ = addToTab(
-        0, CreateWindowExW(0, L"BUTTON", L"\u5728\u56FE\u6807\u4E0B\u65B9\u663E\u793A\u5E94\u7528\u540D\u79F0",
-                           WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, ctrlX, y0, ctrlW,
-                           ScalePx(24, dpi_), hwnd_,
+        0, CreateWindowExW(0, L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, ctrlX,
+                           y0 + ScalePx(2, dpi_), boxSz, boxSz, hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdShowTitleCheck)), hInst,
                            nullptr));
+    addToTab(0, CreateWindowExW(
+                    0, L"STATIC",
+                    L"\u5728\u56FE\u6807\u4E0B\u65B9\u663E\u793A\u5E94\u7528\u540D\u79F0",
+                    WS_CHILD | SS_NOTIFY, ctrlX + boxSz + ScalePx(6, dpi_), y0 + ScalePx(2, dpi_),
+                    ctrlW - boxSz - ScalePx(6, dpi_), ScalePx(20, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdShowTitleCheck + 1000)), hInst,
+                    nullptr));
     y0 += ScalePx(34, dpi_);
 
     addLabel(0, L"\u5F53\u524D\u58C1\u7EB8:", px, y0 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
@@ -654,30 +739,40 @@ void SettingsWindow::BuildControls() {
     // === Tab 1: Activation & Behavior ===
     int y1 = py;
     enableHotKeyCheck_ = addToTab(
-        1, CreateWindowExW(0, L"BUTTON", L"\u542F\u7528\u5168\u5C40\u547C\u51FA\u70ED\u952E:",
-                           WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, px, y1 + ScalePx(3, dpi_),
-                           ScalePx(150, dpi_), ScalePx(24, dpi_), hwnd_,
+        1, CreateWindowExW(0, L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, px,
+                           y1 + ScalePx(4, dpi_), boxSz, boxSz, hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdEnableHotKeyCheck)),
                            hInst, nullptr));
+    addToTab(1, CreateWindowExW(
+                    0, L"STATIC", L"\u542F\u7528\u5168\u5C40\u547C\u51FA\u70ED\u952E:",
+                    WS_CHILD | SS_NOTIFY, px + boxSz + ScalePx(6, dpi_), y1 + ScalePx(4, dpi_),
+                    ScalePx(130, dpi_), ScalePx(20, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdEnableHotKeyCheck + 1000)),
+                    hInst, nullptr));
     hotKeyEdit_ = addToTab(
         1, CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                           WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, px + ScalePx(158, dpi_), y1,
+                           WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL, px + ScalePx(162, dpi_), y1,
                            ScalePx(140, dpi_), ScalePx(26, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHotKeyEdit)), hInst,
                            nullptr));
     hotKeyHint_ = addToTab(
-        1, CreateWindowExW(0, L"STATIC", L"", WS_CHILD, px + ScalePx(306, dpi_),
-                           y1 + ScalePx(4, dpi_), pw - ScalePx(306, dpi_), ScalePx(20, dpi_), hwnd_,
+        1, CreateWindowExW(0, L"STATIC", L"", WS_CHILD, px + ScalePx(310, dpi_),
+                           y1 + ScalePx(4, dpi_), pw - ScalePx(310, dpi_), ScalePx(20, dpi_), hwnd_,
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdHotKeyHint)), hInst,
                            nullptr));
     y1 += ScalePx(34, dpi_);
 
     auto addCheck = [&](int checkId, const wchar_t* text) {
         HWND h = addToTab(
-            1, CreateWindowExW(0, L"BUTTON", text, WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, px,
-                               y1, pw, ScalePx(24, dpi_), hwnd_,
+            1, CreateWindowExW(0, L"BUTTON", L"", WS_CHILD | WS_TABSTOP | BS_AUTOCHECKBOX, px,
+                               y1 + ScalePx(2, dpi_), boxSz, boxSz, hwnd_,
                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(checkId)), hInst,
                                nullptr));
+        addToTab(1, CreateWindowExW(
+                        0, L"STATIC", text, WS_CHILD | SS_NOTIFY, px + boxSz + ScalePx(6, dpi_),
+                        y1 + ScalePx(2, dpi_), pw - boxSz - ScalePx(6, dpi_), ScalePx(20, dpi_),
+                        hwnd_, reinterpret_cast<HMENU>(static_cast<INT_PTR>(checkId + 1000)),
+                        hInst, nullptr));
         y1 += ScalePx(28, dpi_);
         return h;
     };
@@ -808,7 +903,7 @@ void SettingsWindow::BuildControls() {
                     cw - pad - closeW, ch - pad - closeH, closeW, closeH, hwnd_,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdCloseBtn)), hInst, nullptr);
 
-    // Apply uniform font & Explorer theme
+    // Apply uniform font & Explorer/Combo dark mode theme
     EnumChildWindows(
         hwnd_,
         [](HWND ch, LPARAM fontPtr) -> BOOL {
@@ -816,15 +911,7 @@ void SettingsWindow::BuildControls() {
             return TRUE;
         },
         reinterpret_cast<LPARAM>(font_));
-    if (isDark_) {
-        EnumChildWindows(
-            hwnd_,
-            [](HWND ch, LPARAM) -> BOOL {
-                SetWindowTheme(ch, L"DarkMode_Explorer", nullptr);
-                return TRUE;
-            },
-            0);
-    }
+    ApplyChildThemes();
 }
 
 void SettingsWindow::SwitchTab(int tabIndex) {
@@ -833,6 +920,9 @@ void SettingsWindow::SwitchTab(int tabIndex) {
         const int cmd = (i == activeTab_) ? SW_SHOW : SW_HIDE;
         for (HWND h : tabPages_[i]) {
             ShowWindow(h, cmd);
+        }
+        if (tabButtons_[i] != nullptr) {
+            InvalidateRect(tabButtons_[i], nullptr, TRUE);
         }
     }
     if (activeTab_ == 2) {

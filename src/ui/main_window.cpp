@@ -132,6 +132,44 @@ void ForceWindowForeground(HWND hwnd) {
     }
 }
 
+UINT HitTestResizeWmsz(HWND hwnd, int xScreen, int yScreen, std::uint32_t dpi) {
+    RECT winRect{};
+    if (!GetWindowRect(hwnd, &winRect)) {
+        return 0;
+    }
+    const int border = core::DipToPhysicalPx(6.0, dpi);
+    const bool onLeft = xScreen >= winRect.left && xScreen < winRect.left + border;
+    const bool onRight = xScreen <= winRect.right && xScreen >= winRect.right - border;
+    const bool onTop = yScreen >= winRect.top && yScreen < winRect.top + border;
+    const bool onBottom = yScreen <= winRect.bottom && yScreen >= winRect.bottom - border;
+
+    if (onTop && onLeft) {
+        return WMSZ_TOPLEFT;
+    }
+    if (onTop && onRight) {
+        return WMSZ_TOPRIGHT;
+    }
+    if (onBottom && onLeft) {
+        return WMSZ_BOTTOMLEFT;
+    }
+    if (onBottom && onRight) {
+        return WMSZ_BOTTOMRIGHT;
+    }
+    if (onLeft) {
+        return WMSZ_LEFT;
+    }
+    if (onRight) {
+        return WMSZ_RIGHT;
+    }
+    if (onTop) {
+        return WMSZ_TOP;
+    }
+    if (onBottom) {
+        return WMSZ_BOTTOM;
+    }
+    return 0;
+}
+
 std::wstring ReadClipboardText(HWND hwnd) {
     if (!OpenClipboard(hwnd)) {
         return {};
@@ -236,7 +274,7 @@ bool MainWindow::Create(HINSTANCE hInstance, bool registerSystemHooks) {
 
     suppressSizePersist_ = true;
     hwnd_ = CreateWindowExW(exStyle, kWindowClassName, L"GeekDeskCpp",
-                            WS_POPUP | WS_THICKFRAME | WS_CLIPCHILDREN, initPos.x, initPos.y,
+                            WS_POPUP | WS_CLIPCHILDREN, initPos.x, initPos.y,
                             initW, initH, nullptr, nullptr, hInstance, this);
     suppressSizePersist_ = false;
 
@@ -547,42 +585,11 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_NCHITTEST: {
-        RECT winRect{};
-        GetWindowRect(hwnd_, &winRect);
         const int x = GET_X_LPARAM(lParam);
         const int y = GET_Y_LPARAM(lParam);
-        const int border = core::DipToPhysicalPx(6.0, dpi_);
-
-        const bool onLeft = x < winRect.left + border;
-        const bool onRight = x >= winRect.right - border;
-        const bool onTop = y < winRect.top + border;
-        const bool onBottom = y >= winRect.bottom - border;
-
-        if (onTop && onLeft) {
-            return HTTOPLEFT;
+        if (HitTestResizeWmsz(hwnd_, x, y, dpi_) != 0) {
+            return HTCLIENT;
         }
-        if (onTop && onRight) {
-            return HTTOPRIGHT;
-        }
-        if (onBottom && onLeft) {
-            return HTBOTTOMLEFT;
-        }
-        if (onBottom && onRight) {
-            return HTBOTTOMRIGHT;
-        }
-        if (onLeft) {
-            return HTLEFT;
-        }
-        if (onRight) {
-            return HTRIGHT;
-        }
-        if (onTop) {
-            return HTTOP;
-        }
-        if (onBottom) {
-            return HTBOTTOM;
-        }
-
         POINT clientPt{x, y};
         ScreenToClient(hwnd_, &clientPt);
         const float xDip = PxToDip(clientPt.x);
@@ -593,6 +600,28 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         return HTCLIENT;
     }
+
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT pt{};
+            GetCursorPos(&pt);
+            const UINT wmsz = HitTestResizeWmsz(hwnd_, pt.x, pt.y, dpi_);
+            if (wmsz != 0) {
+                LPCWSTR cursorId = IDC_ARROW;
+                if (wmsz == WMSZ_LEFT || wmsz == WMSZ_RIGHT) {
+                    cursorId = IDC_SIZEWE;
+                } else if (wmsz == WMSZ_TOP || wmsz == WMSZ_BOTTOM) {
+                    cursorId = IDC_SIZENS;
+                } else if (wmsz == WMSZ_TOPLEFT || wmsz == WMSZ_BOTTOMRIGHT) {
+                    cursorId = IDC_SIZENWSE;
+                } else if (wmsz == WMSZ_TOPRIGHT || wmsz == WMSZ_BOTTOMLEFT) {
+                    cursorId = IDC_SIZENESW;
+                }
+                SetCursor(LoadCursorW(nullptr, cursorId));
+                return TRUE;
+            }
+        }
+        break;
 
     case WM_ERASEBKGND:
         return 1;
@@ -925,6 +954,14 @@ void MainWindow::OnMouseLeave() {
 }
 
 void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
+    POINT screenPt{xPx, yPx};
+    ClientToScreen(hwnd_, &screenPt);
+    if (const UINT wmsz = HitTestResizeWmsz(hwnd_, screenPt.x, screenPt.y, dpi_); wmsz != 0) {
+        ReleaseCapture();
+        SendMessageW(hwnd_, WM_SYSCOMMAND, SC_SIZE | wmsz, 0);
+        return;
+    }
+
     const float xDip = PxToDip(xPx);
     const float yDip = PxToDip(yPx);
 

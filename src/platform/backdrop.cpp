@@ -41,6 +41,9 @@ bool ApplyWindowBackdrop(HWND hwnd, core::BackdropMode mode, bool isDark, int co
         (cornerRadius > 0) ? static_cast<DWORD>(DWMWCP_ROUND) : static_cast<DWORD>(DWMWCP_DONOTROUND);
     DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPref, sizeof(cornerPref));
 
+    const COLORREF borderColor = isDark ? RGB(54, 58, 70) : RGB(212, 216, 224);
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderColor, sizeof(borderColor));
+
     const bool wantsSystemBackdrop =
         (mode == core::BackdropMode::Acrylic || mode == core::BackdropMode::Mica ||
          mode == core::BackdropMode::MicaAlt);

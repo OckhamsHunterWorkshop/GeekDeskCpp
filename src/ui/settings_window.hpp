@@ -60,9 +60,12 @@ private:
     void EmitSettingsChanged();
     void PerformRestoreFromPath(const std::filesystem::path& bundlePath);
     void RebuildThemeBrushes();
+    void ApplyChildThemes();
 
     enum ControlId : int {
-        kIdTab = 4000,
+        kIdTab0 = 4000,
+        kIdTab1,
+        kIdTab2,
         kIdCloseBtn,
         // Appearance
         kIdThemeCombo,
@@ -108,7 +111,7 @@ private:
 
     HWND hwnd_ = nullptr;
     HWND ownerHwnd_ = nullptr;
-    HWND tabCtrl_ = nullptr;
+    HWND tabButtons_[3]{};
     HFONT font_ = nullptr;
     HBRUSH bgBrush_ = nullptr;
     HBRUSH editBrush_ = nullptr;

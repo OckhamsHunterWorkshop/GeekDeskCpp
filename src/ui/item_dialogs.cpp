@@ -121,6 +121,13 @@ LRESULT CALLBACK TextDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     }
 
     switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wParam), &rc, st->colors.bgBrush);
+        return 1;
+    }
+
     case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
@@ -225,6 +232,13 @@ LRESULT CALLBACK ItemDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
     }
 
     switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wParam), &rc, st->colors.bgBrush);
+        return 1;
+    }
+
     case WM_CTLCOLORDLG:
     case WM_CTLCOLORSTATIC:
     case WM_CTLCOLORBTN:
@@ -234,6 +248,13 @@ LRESULT CALLBACK ItemDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 
     case WM_COMMAND: {
         const int id = LOWORD(wParam);
+        const int code = HIWORD(wParam);
+        if (code == STN_CLICKED && id == kIdItemAdmin + 1000) {
+            const LRESULT cur = SendMessageW(st->adminCheck, BM_GETCHECK, 0, 0);
+            SendMessageW(st->adminCheck, BM_SETCHECK,
+                         cur == BST_CHECKED ? BST_UNCHECKED : BST_CHECKED, 0);
+            return 0;
+        }
         if (id == kIdItemBrowseFile) {
             if (auto chosen = platform::PickFileDialog(hwnd, L"\u9009\u62E9\u5E94\u7528\u6216\u6587\u4EF6");
                 chosen.has_value()) {
@@ -572,10 +593,18 @@ bool ShowItemEditDialog(HWND owner,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemTooltip)), hInst, nullptr);
     y += rowH + gap;
 
+    const int cbSize = Scale(18, dpi);
+    const int cbH = Scale(24, dpi);
     state.adminCheck = CreateWindowExW(
-        0, L"BUTTON", L"\u9ED8\u8BA4\u4EE5\u7BA1\u7406\u5458\u6743\u9650\u8FD0\u884C (runAsAdmin)",
-        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, ctrlX, y, ctrlW, Scale(24, dpi),
-        dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemAdmin)), hInst, nullptr);
+        0, L"BUTTON", L"",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTOCHECKBOX, ctrlX, y + Scale(3, dpi),
+        cbSize, cbSize, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemAdmin)), hInst,
+        nullptr);
+    CreateWindowExW(
+        0, L"STATIC", L"\u9ED8\u8BA4\u4EE5\u7BA1\u7406\u5458\u6743\u9650\u8FD0\u884C (runAsAdmin)",
+        WS_CHILD | WS_VISIBLE | SS_NOTIFY | SS_CENTERIMAGE, ctrlX + cbSize + Scale(6, dpi), y,
+        ctrlW - cbSize - Scale(6, dpi), cbH, dlg,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemAdmin + 1000)), hInst, nullptr);
     SendMessageW(state.adminCheck, BM_SETCHECK, inOutItem.runAsAdmin ? BST_CHECKED : BST_UNCHECKED,
                  0);
 
@@ -595,7 +624,13 @@ bool ShowItemEditDialog(HWND owner,
         EnumChildWindows(
             dlg,
             [](HWND ch, LPARAM) -> BOOL {
-                SetWindowTheme(ch, L"DarkMode_Explorer", nullptr);
+                wchar_t cls[32]{};
+                GetClassNameW(ch, cls, 32);
+                if (std::wstring_view(cls) == L"ComboBox") {
+                    SetWindowTheme(ch, L"DarkMode_CFD", nullptr);
+                } else {
+                    SetWindowTheme(ch, L"DarkMode_Explorer", nullptr);
+                }
                 return TRUE;
             },
             0);

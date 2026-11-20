@@ -589,8 +589,10 @@ bool D2DRenderer::Render(HDC targetPaintDc,
     }
 
     if (composedLine.empty()) {
+        constexpr std::wstring_view kPlaceholder =
+            L"\u641C\u7D22\u5E94\u7528 / \u62FC\u97F3\u9996\u5B57\u6BCD (Ctrl+F)";
         solidBrush_->SetColor(ToD2D(pal.textSecondary));
-        dcTarget_->DrawTextW(L"\u641C\u7D22\u5E94\u7528 / \u62FC\u97F3\u9996\u5B57\u6BCD (Ctrl+F)", 24,
+        dcTarget_->DrawTextW(kPlaceholder.data(), static_cast<UINT32>(kPlaceholder.size()),
                              searchFmt_.Get(), ToRect(searchTextRect), solidBrush_.Get());
         outLayout.searchCaretX = searchTextRect.left;
     } else {
