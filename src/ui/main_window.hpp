@@ -87,7 +87,8 @@ private:
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
 
-    void OnPaint();
+    bool PresentLayeredFrame();
+    void RequestRender();
     void OnResizeOrDpiChanged();
     void OnMouseMove(int xPx, int yPx);
     void OnMouseLeave();
@@ -169,6 +170,7 @@ private:
     int modalDepth_ = 0;
     bool suppressSizePersist_ = false;
     bool suppressDiskPersist_ = false;
+    bool renderPending_ = false;
 
     std::size_t activeGroupIndex_ = 0;
     std::wstring searchQueryWide_;

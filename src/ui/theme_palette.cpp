@@ -87,18 +87,40 @@ ThemePalette BuildThemePalette(const core::AppearanceSettings& app,
     const float bgOpacity = static_cast<float>(std::clamp(app.backgroundOpacity, 0.0, 1.0));
     const float cardOpacity = static_cast<float>(std::clamp(app.cardOpacity, 0.0, 1.0));
 
-    // When DWM Acrylic/Mica/MicaAlt is active, map backgroundOpacity into a clearly visible
-    // tint alpha [0.12, 0.92] so dragging opacity visibly changes transparency.
-    // On fallback or Gradient/Wallpaper mode, window base is opaque (1.0f).
-    const float tintAlpha = p.useNativeBackdrop ? (0.12f + 0.80f * bgOpacity) : 1.0f;
+    // When layered glass mode (Acrylic/Mica/MicaAlt) is active, map backgroundOpacity into a
+    // clearly visible tint alpha [0.16, 0.96]. When native/glass mode is disabled (e.g. Gradient
+    // or fallback tests), windowTint alpha remains 1.0f.
+    const float tintAlpha = p.useNativeBackdrop ? (0.16f + 0.80f * bgOpacity) : 1.0f;
+
+    auto pickTintBase = [&](ColorRgba acrylicC, ColorRgba micaC, ColorRgba micaAltC,
+                            ColorRgba otherC) -> ColorRgba {
+        switch (app.backdrop) {
+        case core::BackdropMode::Acrylic:
+            return acrylicC;
+        case core::BackdropMode::Mica:
+            return micaC;
+        case core::BackdropMode::MicaAlt:
+            return micaAltC;
+        case core::BackdropMode::Wallpaper:
+        case core::BackdropMode::Gradient:
+            return otherC;
+        }
+        return otherC;
+    };
 
     if (isDark) {
-        p.windowTint = RgbaByte(20, 22, 28, tintAlpha);
-        p.sidebarBg = RgbaByte(16, 18, 24, p.useNativeBackdrop ? (0.18f + 0.40f * bgOpacity) : 0.94f);
+        p.windowTint = pickTintBase(RgbaByte(20, 24, 34, tintAlpha), RgbaByte(28, 34, 48, tintAlpha),
+                                    RgbaByte(12, 16, 26, tintAlpha), RgbaByte(20, 22, 28, tintAlpha));
+        p.windowBorder = (app.backdrop == core::BackdropMode::Acrylic)
+                             ? RgbaByte(255, 255, 255, 0.24f)
+                             : RgbaByte(255, 255, 255, 0.14f);
+        p.sidebarBg = RgbaByte(14, 17, 25, p.useNativeBackdrop ? (0.20f + 0.45f * bgOpacity) : 0.72f);
         p.headerButtonBg = RgbaByte(255, 255, 255, 0.06f);
         p.headerButtonHoverBg = RgbaByte(255, 255, 255, 0.14f);
-        // Opaque high-contrast dark card base multiplied by cardOpacity so changes stand out.
-        p.contentCardBg = RgbaByte(30, 32, 40, std::clamp(cardOpacity, 0.03f, 0.95f));
+        p.contentCardBg = RgbaByte(44, 50, 66, std::clamp(cardOpacity, 0.0f, 0.94f));
+        p.contentCardBorder = (cardOpacity > 0.01f)
+                                  ? RgbaByte(255, 255, 255, 0.06f + 0.16f * cardOpacity)
+                                  : RgbaByte(255, 255, 255, 0.0f);
         p.tileBg = RgbaByte(255, 255, 255, 0.00f);
         p.tileHoverBg = RgbaByte(255, 255, 255, 0.11f);
         p.tileSelectedBg = RgbaByte(59, 130, 246, 0.28f);
@@ -112,12 +134,19 @@ ThemePalette BuildThemePalette(const core::AppearanceSettings& app,
         p.badgeBg = RgbaByte(245, 158, 11, 0.92f);
         p.badgeText = RgbaByte(15, 23, 42, 1.0f);
     } else {
-        p.windowTint = RgbaByte(244, 246, 250, tintAlpha);
-        p.sidebarBg = RgbaByte(234, 238, 245, p.useNativeBackdrop ? (0.20f + 0.45f * bgOpacity) : 0.96f);
+        p.windowTint =
+            pickTintBase(RgbaByte(242, 246, 252, tintAlpha), RgbaByte(244, 247, 252, tintAlpha),
+                         RgbaByte(214, 224, 240, tintAlpha), RgbaByte(244, 246, 250, tintAlpha));
+        p.windowBorder = (app.backdrop == core::BackdropMode::Acrylic)
+                             ? RgbaByte(15, 23, 42, 0.18f)
+                             : RgbaByte(15, 23, 42, 0.14f);
+        p.sidebarBg = RgbaByte(230, 236, 246, p.useNativeBackdrop ? (0.24f + 0.48f * bgOpacity) : 0.78f);
         p.headerButtonBg = RgbaByte(15, 23, 42, 0.05f);
         p.headerButtonHoverBg = RgbaByte(15, 23, 42, 0.12f);
-        // Opaque white card base multiplied by cardOpacity.
-        p.contentCardBg = RgbaByte(255, 255, 255, std::clamp(cardOpacity, 0.04f, 0.96f));
+        p.contentCardBg = RgbaByte(255, 255, 255, std::clamp(cardOpacity, 0.0f, 0.96f));
+        p.contentCardBorder = (cardOpacity > 0.01f)
+                                  ? RgbaByte(15, 23, 42, 0.05f + 0.14f * cardOpacity)
+                                  : RgbaByte(15, 23, 42, 0.0f);
         p.tileBg = RgbaByte(15, 23, 42, 0.00f);
         p.tileHoverBg = RgbaByte(15, 23, 42, 0.07f);
         p.tileSelectedBg = RgbaByte(37, 99, 235, 0.18f);

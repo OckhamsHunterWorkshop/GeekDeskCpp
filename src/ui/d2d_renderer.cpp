@@ -2,6 +2,7 @@
 
 #include "core/placement_math.hpp"
 #include "core/utf8.hpp"
+#include "platform/backdrop.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -94,6 +95,95 @@ void DrawFolderGlyph(ID2D1RenderTarget* rt, ID2D1Brush* brush, float left, float
     rt->DrawRoundedRectangle(D2D1_ROUNDED_RECT{tab, 1.0f, 1.0f}, brush, 1.2f);
     rt->DrawRoundedRectangle(D2D1_ROUNDED_RECT{body, 1.5f, 1.5f}, brush, 1.3f);
 }
+
+void BoxBlurPbgra(BgraImage& img, int radius, int passes) {
+    if (!img.IsValid() || radius <= 0 || passes <= 0) {
+        return;
+    }
+    const int w = img.width;
+    const int h = img.height;
+    std::vector<std::uint8_t> tmp(img.pixels.size(), 0);
+
+    for (int pass = 0; pass < passes; ++pass) {
+        // Horizontal pass: img -> tmp
+        for (int y = 0; y < h; ++y) {
+            const std::size_t rowOff = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) * 4u;
+            int sumB = 0;
+            int sumG = 0;
+            int sumR = 0;
+            int sumA = 0;
+            const int win = radius * 2 + 1;
+            for (int k = -radius; k <= radius; ++k) {
+                const int sx = std::clamp(k, 0, w - 1);
+                const std::size_t off = rowOff + static_cast<std::size_t>(sx) * 4u;
+                sumB += img.pixels[off + 0];
+                sumG += img.pixels[off + 1];
+                sumR += img.pixels[off + 2];
+                sumA += img.pixels[off + 3];
+            }
+            for (int x = 0; x < w; ++x) {
+                const std::size_t dstOff = rowOff + static_cast<std::size_t>(x) * 4u;
+                tmp[dstOff + 0] = static_cast<std::uint8_t>(sumB / win);
+                tmp[dstOff + 1] = static_cast<std::uint8_t>(sumG / win);
+                tmp[dstOff + 2] = static_cast<std::uint8_t>(sumR / win);
+                tmp[dstOff + 3] = static_cast<std::uint8_t>(sumA / win);
+
+                const int remX = std::clamp(x - radius, 0, w - 1);
+                const int addX = std::clamp(x + radius + 1, 0, w - 1);
+                const std::size_t remOff = rowOff + static_cast<std::size_t>(remX) * 4u;
+                const std::size_t addOff = rowOff + static_cast<std::size_t>(addX) * 4u;
+                sumB += static_cast<int>(img.pixels[addOff + 0]) - static_cast<int>(img.pixels[remOff + 0]);
+                sumG += static_cast<int>(img.pixels[addOff + 1]) - static_cast<int>(img.pixels[remOff + 1]);
+                sumR += static_cast<int>(img.pixels[addOff + 2]) - static_cast<int>(img.pixels[remOff + 2]);
+                sumA += static_cast<int>(img.pixels[addOff + 3]) - static_cast<int>(img.pixels[remOff + 3]);
+            }
+        }
+
+        // Vertical pass: tmp -> img
+        for (int x = 0; x < w; ++x) {
+            const std::size_t colOff = static_cast<std::size_t>(x) * 4u;
+            const std::size_t stride = static_cast<std::size_t>(w) * 4u;
+            int sumB = 0;
+            int sumG = 0;
+            int sumR = 0;
+            int sumA = 0;
+            const int win = radius * 2 + 1;
+            for (int k = -radius; k <= radius; ++k) {
+                const int sy = std::clamp(k, 0, h - 1);
+                const std::size_t off = static_cast<std::size_t>(sy) * stride + colOff;
+                sumB += tmp[off + 0];
+                sumG += tmp[off + 1];
+                sumR += tmp[off + 2];
+                sumA += tmp[off + 3];
+            }
+            for (int y = 0; y < h; ++y) {
+                const std::size_t dstOff = static_cast<std::size_t>(y) * stride + colOff;
+                img.pixels[dstOff + 0] = static_cast<std::uint8_t>(sumB / win);
+                img.pixels[dstOff + 1] = static_cast<std::uint8_t>(sumG / win);
+                img.pixels[dstOff + 2] = static_cast<std::uint8_t>(sumR / win);
+                img.pixels[dstOff + 3] = static_cast<std::uint8_t>(sumA / win);
+
+                const int remY = std::clamp(y - radius, 0, h - 1);
+                const int addY = std::clamp(y + radius + 1, 0, h - 1);
+                const std::size_t remOff = static_cast<std::size_t>(remY) * stride + colOff;
+                const std::size_t addOff = static_cast<std::size_t>(addY) * stride + colOff;
+                sumB += static_cast<int>(tmp[addOff + 0]) - static_cast<int>(tmp[remOff + 0]);
+                sumG += static_cast<int>(tmp[addOff + 1]) - static_cast<int>(tmp[remOff + 1]);
+                sumR += static_cast<int>(tmp[addOff + 2]) - static_cast<int>(tmp[remOff + 2]);
+                sumA += static_cast<int>(tmp[addOff + 3]) - static_cast<int>(tmp[remOff + 3]);
+            }
+        }
+    }
+}
+
+struct ScreenDcGuard {
+    HDC hdc = nullptr;
+    ~ScreenDcGuard() {
+        if (hdc != nullptr) {
+            ReleaseDC(nullptr, hdc);
+        }
+    }
+};
 
 } // namespace
 
@@ -200,6 +290,7 @@ bool D2DRenderer::EnsureRenderTarget(std::uint32_t dpi) {
         }
         dcTarget_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         solidBrush_.Reset();
+        clipLayer_.Reset();
     } else if (dpi > 0) {
         dcTarget_->SetDpi(static_cast<float>(dpi), static_cast<float>(dpi));
     }
@@ -209,6 +300,9 @@ bool D2DRenderer::EnsureRenderTarget(std::uint32_t dpi) {
                 D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 1.0f}, solidBrush_.ReleaseAndGetAddressOf()))) {
             return false;
         }
+    }
+    if (!clipLayer_) {
+        dcTarget_->CreateLayer(nullptr, clipLayer_.ReleaseAndGetAddressOf());
     }
     return true;
 }
@@ -271,8 +365,12 @@ void D2DRenderer::DiscardTargetAndBitmaps() {
     wallpaperBitmap_.Reset();
     cachedWallpaperKey_.clear();
     wallpaperLoadAttempted_ = false;
+    desktopMicaBitmap_.Reset();
+    cachedDesktopWallpaperKey_.clear();
+    desktopMicaLoadAttempted_ = false;
     iconBitmaps_.clear();
     bitmapLru_.clear();
+    clipLayer_.Reset();
     solidBrush_.Reset();
     dcTarget_.Reset();
 }
@@ -281,6 +379,12 @@ void D2DRenderer::InvalidateWallpaperCache() {
     wallpaperBitmap_.Reset();
     cachedWallpaperKey_.clear();
     wallpaperLoadAttempted_ = false;
+}
+
+void D2DRenderer::InvalidateDesktopWallpaperCache() {
+    desktopMicaBitmap_.Reset();
+    cachedDesktopWallpaperKey_.clear();
+    desktopMicaLoadAttempted_ = false;
 }
 
 LayoutSnapshot D2DRenderer::ComputeLayout(const core::AppSettings& settings,
@@ -481,18 +585,63 @@ ID2D1Bitmap* D2DRenderer::GetOrLoadWallpaperBitmap(const std::filesystem::path& 
     return wallpaperBitmap_.Get();
 }
 
-bool D2DRenderer::Render(HDC targetPaintDc,
-                         int widthPx,
-                         int heightPx,
-                         std::uint32_t dpi,
-                         const RenderState& state,
-                         LayoutSnapshot& outLayout) {
-    if (state.settings == nullptr || state.palette == nullptr || state.groups == nullptr ||
-        state.displayedItems == nullptr || targetPaintDc == nullptr) {
+ID2D1Bitmap* D2DRenderer::GetOrLoadDesktopMicaBitmap() {
+    if (!dcTarget_) {
+        return nullptr;
+    }
+    const std::filesystem::path wpPath = platform::GetDesktopWallpaperPath();
+    if (wpPath.empty()) {
+        cachedDesktopWallpaperKey_.clear();
+        desktopMicaLoadAttempted_ = true;
+        desktopMicaBitmap_.Reset();
+        return nullptr;
+    }
+
+    const std::string key = core::utf8::PathToUtf8(wpPath);
+    if (key == cachedDesktopWallpaperKey_ && desktopMicaLoadAttempted_) {
+        return desktopMicaBitmap_.Get();
+    }
+
+    cachedDesktopWallpaperKey_ = key;
+    desktopMicaLoadAttempted_ = true;
+    desktopMicaBitmap_.Reset();
+
+    BgraImage img;
+    if (!IconCache::LoadImageFileToPbgra(wpPath, 192, img) || !img.IsValid()) {
+        return nullptr;
+    }
+    BoxBlurPbgra(img, 12, 3);
+
+    D2D1_BITMAP_PROPERTIES props{};
+    props.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    props.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+    props.dpiX = 96.0f;
+    props.dpiY = 96.0f;
+    dcTarget_->CreateBitmap(D2D1_SIZE_U{static_cast<UINT32>(img.width),
+                                        static_cast<UINT32>(img.height)},
+                            img.pixels.data(), static_cast<UINT32>(img.width * 4), &props,
+                            desktopMicaBitmap_.ReleaseAndGetAddressOf());
+    return desktopMicaBitmap_.Get();
+}
+
+bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
+                                        int widthPx,
+                                        int heightPx,
+                                        std::uint32_t dpi,
+                                        const RenderState& state,
+                                        LayoutSnapshot& outLayout) {
+    if (hwnd == nullptr || widthPx <= 0 || heightPx <= 0 || state.settings == nullptr ||
+        state.palette == nullptr || state.groups == nullptr || state.displayedItems == nullptr) {
         return false;
     }
 
-    if (!EnsureRenderTarget(dpi) || !EnsureBackBuffer(targetPaintDc, widthPx, heightPx)) {
+    ScreenDcGuard screenDc;
+    screenDc.hdc = GetDC(nullptr);
+    if (screenDc.hdc == nullptr) {
+        return false;
+    }
+
+    if (!EnsureRenderTarget(dpi) || !EnsureBackBuffer(screenDc.hdc, widthPx, heightPx)) {
         return false;
     }
 
@@ -511,14 +660,46 @@ bool D2DRenderer::Render(HDC targetPaintDc,
 
     const ThemePalette& pal = *state.palette;
     const auto& app = state.settings->appearance;
+    const float bgOpacity = std::clamp(static_cast<float>(app.backgroundOpacity), 0.0f, 1.0f);
+    const float cornerR = std::clamp(static_cast<float>(app.cornerRadius), 0.0f,
+                                     std::min(24.0f, std::min(widthDip, heightDip) * 0.45f));
+    const D2D1_RECT_F fullRect{0.0f, 0.0f, widthDip, heightDip};
+    const D2D1_ROUNDED_RECT windowRound{
+        D2D1_RECT_F{0.5f, 0.5f, std::max(1.5f, widthDip - 0.5f), std::max(1.5f, heightDip - 0.5f)},
+        cornerR, cornerR};
 
     dcTarget_->BeginDraw();
+    dcTarget_->Clear(D2D1_COLOR_F{0.0f, 0.0f, 0.0f, 0.0f});
 
-    // 1. Background surface (Wallpaper / Gradient / DWM tinted Acrylic-Mica-MicaAlt)
+    bool pushedLayer = false;
+    if (cornerR > 0.5f && clipLayer_ && factory_) {
+        platform::ComPtr<ID2D1RoundedRectangleGeometry> clipGeo;
+        if (SUCCEEDED(factory_->CreateRoundedRectangleGeometry(windowRound,
+                                                               clipGeo.ReleaseAndGetAddressOf()))) {
+            D2D1_LAYER_PARAMETERS lp{};
+            lp.contentBounds = fullRect;
+            lp.geometricMask = clipGeo.Get();
+            lp.maskAntialiasMode = D2D1_ANTIALIAS_MODE_PER_PRIMITIVE;
+            lp.maskTransform._11 = 1.0f;
+            lp.maskTransform._22 = 1.0f;
+            lp.opacity = 1.0f;
+            lp.opacityBrush = nullptr;
+            lp.layerOptions = D2D1_LAYER_OPTIONS_NONE;
+            dcTarget_->PushLayer(&lp, clipLayer_.Get());
+            pushedLayer = true;
+        }
+    }
+
+    // 1. Background surface (Gradient / Wallpaper / Mica / MicaAlt / Acrylic)
     if (app.backdrop == core::BackdropMode::Gradient) {
+        const float alpha = std::clamp(0.22f + 0.78f * bgOpacity, 0.22f, 1.0f);
+        D2D1_COLOR_F s0 = ToD2D(pal.gradientStart);
+        D2D1_COLOR_F s1 = ToD2D(pal.gradientEnd);
+        s0.a = alpha;
+        s1.a = alpha;
         D2D1_GRADIENT_STOP stops[2] = {
-            {0.0f, ToD2D(pal.gradientStart)},
-            {1.0f, ToD2D(pal.gradientEnd)},
+            {0.0f, s0},
+            {1.0f, s1},
         };
         platform::ComPtr<ID2D1GradientStopCollection> stopCollection;
         if (SUCCEEDED(dcTarget_->CreateGradientStopCollection(
@@ -529,17 +710,23 @@ bool D2DRenderer::Render(HDC targetPaintDc,
                 D2D1_POINT_2F{0.0f, 0.0f}, D2D1_POINT_2F{widthDip, heightDip}};
             if (SUCCEEDED(dcTarget_->CreateLinearGradientBrush(
                     lbp, stopCollection.Get(), gradBrush.ReleaseAndGetAddressOf()))) {
-                dcTarget_->FillRectangle(D2D1_RECT_F{0.0f, 0.0f, widthDip, heightDip},
-                                         gradBrush.Get());
+                dcTarget_->FillRectangle(fullRect, gradBrush.Get());
             } else {
-                dcTarget_->Clear(ToD2D(pal.windowTint));
+                solidBrush_->SetColor(D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g,
+                                                   pal.windowTint.b, alpha});
+                dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
             }
         } else {
-            dcTarget_->Clear(ToD2D(pal.windowTint));
+            solidBrush_->SetColor(
+                D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g, pal.windowTint.b, alpha});
+            dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
         }
-    } else if (app.backdrop == core::BackdropMode::Wallpaper && app.wallpaperFileName.has_value()) {
-        dcTarget_->Clear(ToD2D(pal.windowTint));
-        if (ID2D1Bitmap* wp = GetOrLoadWallpaperBitmap(state.dataRoot, *app.wallpaperFileName)) {
+    } else if (app.backdrop == core::BackdropMode::Wallpaper) {
+        ID2D1Bitmap* wp = app.wallpaperFileName.has_value()
+                              ? GetOrLoadWallpaperBitmap(state.dataRoot, *app.wallpaperFileName)
+                              : nullptr;
+        if (wp != nullptr) {
+            const float wpAlpha = std::clamp(0.22f + 0.78f * bgOpacity, 0.22f, 1.0f);
             const D2D1_SIZE_F bmpSz = wp->GetSize();
             if (bmpSz.width > 0.0f && bmpSz.height > 0.0f) {
                 const float scale = std::max(widthDip / bmpSz.width, heightDip / bmpSz.height);
@@ -547,17 +734,121 @@ bool D2DRenderer::Render(HDC targetPaintDc,
                 const float drawH = bmpSz.height * scale;
                 const D2D1_RECT_F dest{(widthDip - drawW) * 0.5f, (heightDip - drawH) * 0.5f,
                                        (widthDip + drawW) * 0.5f, (heightDip + drawH) * 0.5f};
-                dcTarget_->DrawBitmap(wp, dest, 1.0f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
-                solidBrush_->SetColor(D2D1_COLOR_F{
-                    pal.windowTint.r, pal.windowTint.g, pal.windowTint.b,
-                    std::clamp(1.0f - static_cast<float>(app.backgroundOpacity) * 0.65f, 0.12f,
-                               0.75f)});
-                dcTarget_->FillRectangle(D2D1_RECT_F{0.0f, 0.0f, widthDip, heightDip},
-                                         solidBrush_.Get());
+                dcTarget_->DrawBitmap(wp, dest, wpAlpha, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                solidBrush_->SetColor(
+                    D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g, pal.windowTint.b,
+                                 0.18f * (0.35f + 0.65f * bgOpacity)});
+                dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
+            }
+        } else {
+            solidBrush_->SetColor(
+                D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g, pal.windowTint.b,
+                             std::clamp(0.22f + 0.75f * bgOpacity, 0.22f, 0.97f)});
+            dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
+        }
+    } else if (app.backdrop == core::BackdropMode::Mica ||
+               app.backdrop == core::BackdropMode::MicaAlt) {
+        const bool isAlt = (app.backdrop == core::BackdropMode::MicaAlt);
+        const float wpAlpha =
+            std::clamp(isAlt ? (0.28f + 0.70f * bgOpacity) : (0.24f + 0.72f * bgOpacity), 0.24f,
+                       0.98f);
+        const float veilAlpha = isAlt ? (0.24f + 0.56f * bgOpacity) : (0.14f + 0.48f * bgOpacity);
+
+        if (ID2D1Bitmap* micaBmp = GetOrLoadDesktopMicaBitmap()) {
+            const D2D1_SIZE_F bSz = micaBmp->GetSize();
+            D2D1_RECT_F srcRect{0.0f, 0.0f, bSz.width, bSz.height};
+            const long monW = state.monitorScreenRect.right - state.monitorScreenRect.left;
+            const long monH = state.monitorScreenRect.bottom - state.monitorScreenRect.top;
+            const long winW = state.windowScreenRect.right - state.windowScreenRect.left;
+            const long winH = state.windowScreenRect.bottom - state.windowScreenRect.top;
+            if (monW > 0 && monH > 0 && winW > 0 && winH > 0 && bSz.width > 2.0f &&
+                bSz.height > 2.0f) {
+                // Compute cover-fit crop within the blurred wallpaper matching window's monitor rect.
+                const float scaleX = bSz.width / static_cast<float>(monW);
+                const float scaleY = bSz.height / static_cast<float>(monH);
+                const float coverScale = std::max(scaleX, scaleY);
+                const float visW = bSz.width / coverScale;
+                const float visH = bSz.height / coverScale;
+                const float offX = (static_cast<float>(monW) - visW) * 0.5f;
+                const float offY = (static_cast<float>(monH) - visH) * 0.5f;
+
+                const float sx0 =
+                    (static_cast<float>(state.windowScreenRect.left - state.monitorScreenRect.left) -
+                     offX) *
+                    coverScale;
+                const float sy0 =
+                    (static_cast<float>(state.windowScreenRect.top - state.monitorScreenRect.top) -
+                     offY) *
+                    coverScale;
+                const float sx1 = sx0 + static_cast<float>(winW) * coverScale;
+                const float sy1 = sy0 + static_cast<float>(winH) * coverScale;
+
+                const float cx0 = std::clamp(sx0, 0.0f, bSz.width - 1.0f);
+                const float cy0 = std::clamp(sy0, 0.0f, bSz.height - 1.0f);
+                const float cx1 = std::clamp(sx1, cx0 + 1.0f, bSz.width);
+                const float cy1 = std::clamp(sy1, cy0 + 1.0f, bSz.height);
+                srcRect = D2D1_RECT_F{cx0, cy0, cx1, cy1};
+            }
+            dcTarget_->DrawBitmap(micaBmp, fullRect, wpAlpha,
+                                  D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &srcRect);
+            solidBrush_->SetColor(
+                D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g, pal.windowTint.b, veilAlpha});
+            dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
+        } else {
+            const COLORREF desk = GetSysColor(COLOR_DESKTOP);
+            const float dR = static_cast<float>(GetRValue(desk)) / 255.0f;
+            const float dG = static_cast<float>(GetGValue(desk)) / 255.0f;
+            const float dB = static_cast<float>(GetBValue(desk)) / 255.0f;
+            const float totalAlpha = std::clamp(wpAlpha + veilAlpha * (1.0f - wpAlpha), 0.30f, 0.99f);
+            const float mix = isAlt ? 0.65f : 0.45f;
+            D2D1_GRADIENT_STOP stops[2] = {
+                {0.0f, D2D1_COLOR_F{dR * (1.0f - mix) + pal.windowTint.r * mix,
+                                    dG * (1.0f - mix) + pal.windowTint.g * mix,
+                                    dB * (1.0f - mix) + pal.windowTint.b * mix, totalAlpha}},
+                {1.0f, D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g, pal.windowTint.b, totalAlpha}},
+            };
+            platform::ComPtr<ID2D1GradientStopCollection> stopCollection;
+            if (SUCCEEDED(dcTarget_->CreateGradientStopCollection(
+                    stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP,
+                    stopCollection.ReleaseAndGetAddressOf()))) {
+                platform::ComPtr<ID2D1LinearGradientBrush> micaGrad;
+                D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES lbp{
+                    D2D1_POINT_2F{0.0f, 0.0f}, D2D1_POINT_2F{widthDip, heightDip}};
+                if (SUCCEEDED(dcTarget_->CreateLinearGradientBrush(
+                        lbp, stopCollection.Get(), micaGrad.ReleaseAndGetAddressOf()))) {
+                    dcTarget_->FillRectangle(fullRect, micaGrad.Get());
+                } else {
+                    solidBrush_->SetColor(D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g,
+                                                       pal.windowTint.b, totalAlpha});
+                    dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
+                }
+            } else {
+                solidBrush_->SetColor(D2D1_COLOR_F{pal.windowTint.r, pal.windowTint.g,
+                                                   pal.windowTint.b, totalAlpha});
+                dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
             }
         }
     } else {
-        dcTarget_->Clear(ToD2D(pal.windowTint));
+        // Acrylic: true per-pixel alpha translucency over the live desktop/windows + subtle sheen
+        solidBrush_->SetColor(ToD2D(pal.windowTint));
+        dcTarget_->FillRectangle(fullRect, solidBrush_.Get());
+
+        D2D1_GRADIENT_STOP stops[2] = {
+            {0.0f, D2D1_COLOR_F{1.0f, 1.0f, 1.0f, pal.isDark ? 0.09f : 0.28f}},
+            {1.0f, D2D1_COLOR_F{1.0f, 1.0f, 1.0f, 0.0f}},
+        };
+        platform::ComPtr<ID2D1GradientStopCollection> stopCollection;
+        if (SUCCEEDED(dcTarget_->CreateGradientStopCollection(
+                stops, 2, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP,
+                stopCollection.ReleaseAndGetAddressOf()))) {
+            platform::ComPtr<ID2D1LinearGradientBrush> sheenBrush;
+            D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES lbp{
+                D2D1_POINT_2F{0.0f, 0.0f}, D2D1_POINT_2F{widthDip * 0.7f, heightDip * 0.7f}};
+            if (SUCCEEDED(dcTarget_->CreateLinearGradientBrush(
+                    lbp, stopCollection.Get(), sheenBrush.ReleaseAndGetAddressOf()))) {
+                dcTarget_->FillRectangle(fullRect, sheenBrush.Get());
+            }
+        }
     }
 
     // 2. Header band: Brand + Custom Search Box + Utility Buttons
@@ -727,6 +1018,10 @@ bool D2DRenderer::Render(HDC targetPaintDc,
         solidBrush_->SetColor(ToD2D(pal.accent));
         dcTarget_->DrawRoundedRectangle(ToRounded(outLayout.contentCardRect, 10.0f, 10.0f),
                                         solidBrush_.Get(), 2.0f);
+    } else if (pal.contentCardBorder.a > 0.005f) {
+        solidBrush_->SetColor(ToD2D(pal.contentCardBorder));
+        dcTarget_->DrawRoundedRectangle(ToRounded(outLayout.contentCardRect, 10.0f, 10.0f),
+                                        solidBrush_.Get(), 1.0f);
     }
 
     dcTarget_->PushAxisAlignedClip(ToRect(outLayout.gridViewportRect),
@@ -842,6 +1137,18 @@ bool D2DRenderer::Render(HDC targetPaintDc,
     dcTarget_->DrawTextW(wStatus.data(), static_cast<UINT32>(wStatus.size()), statusFmt_.Get(),
                          ToRect(outLayout.statusBarRect), solidBrush_.Get());
 
+    if (pushedLayer) {
+        dcTarget_->PopLayer();
+    }
+
+    // 6. Crisp outer window border (1px) matching the corner radius
+    solidBrush_->SetColor(ToD2D(pal.windowBorder));
+    if (cornerR > 0.5f) {
+        dcTarget_->DrawRoundedRectangle(windowRound, solidBrush_.Get(), 1.0f);
+    } else {
+        dcTarget_->DrawRectangle(windowRound.rect, solidBrush_.Get(), 1.0f);
+    }
+
     const HRESULT endHr = dcTarget_->EndDraw();
     if (endHr == D2DERR_RECREATE_TARGET) {
         DiscardTargetAndBitmaps();
@@ -851,8 +1158,12 @@ bool D2DRenderer::Render(HDC targetPaintDc,
         return false;
     }
 
-    BitBlt(targetPaintDc, 0, 0, widthPx, heightPx, memDc_, 0, 0, SRCCOPY);
-    return true;
+    POINT ptSrc{0, 0};
+    SIZE sizeWnd{widthPx, heightPx};
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    const BOOL ok = UpdateLayeredWindow(hwnd, screenDc.hdc, nullptr, &sizeWnd, memDc_, &ptSrc, 0,
+                                        &blend, ULW_ALPHA);
+    return ok != FALSE;
 }
 
 } // namespace geekdesk::ui

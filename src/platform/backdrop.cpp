@@ -2,6 +2,8 @@
 
 #include <dwmapi.h>
 
+#include <array>
+
 namespace geekdesk::platform {
 
 bool IsSystemDarkTheme() {
@@ -29,48 +31,43 @@ bool ResolveIsDark(core::ThemeMode mode) {
     return false;
 }
 
+std::filesystem::path GetDesktopWallpaperPath() {
+    std::array<wchar_t, MAX_PATH * 2> buf{};
+    if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, static_cast<UINT>(buf.size()), buf.data(), 0) ==
+        FALSE) {
+        return {};
+    }
+    buf.back() = L'\0';
+    if (buf[0] == L'\0') {
+        return {};
+    }
+    std::filesystem::path p(buf.data());
+    std::error_code ec;
+    if (!std::filesystem::exists(p, ec) || !std::filesystem::is_regular_file(p, ec)) {
+        return {};
+    }
+    return p;
+}
+
 bool ApplyWindowBackdrop(HWND hwnd, core::BackdropMode mode, bool isDark, int cornerRadius) {
     if (hwnd == nullptr) {
         return false;
     }
+    (void)cornerRadius;
 
     const BOOL darkFlag = isDark ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkFlag, sizeof(darkFlag));
 
-    const DWORD cornerPref =
-        (cornerRadius > 0) ? static_cast<DWORD>(DWMWCP_ROUND) : static_cast<DWORD>(DWMWCP_DONOTROUND);
-    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &cornerPref, sizeof(cornerPref));
+    // Disable Win11 DWM border and fixed rounding on the layered MainWindow so Direct2D
+    // renders crisp 0..24 px anti-aliased corners identically across Windows 10 and Windows 11.
+    const DWORD noRound = static_cast<DWORD>(DWMWCP_DONOTROUND);
+    DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &noRound, sizeof(noRound));
 
-    const COLORREF borderColor = isDark ? RGB(54, 58, 70) : RGB(212, 216, 224);
-    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &borderColor, sizeof(borderColor));
+    const COLORREF noBorder = DWMWA_COLOR_NONE;
+    DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &noBorder, sizeof(noBorder));
 
-    const bool wantsSystemBackdrop =
-        (mode == core::BackdropMode::Acrylic || mode == core::BackdropMode::Mica ||
-         mode == core::BackdropMode::MicaAlt);
-
-    const MARGINS margins = wantsSystemBackdrop ? MARGINS{-1, -1, -1, -1} : MARGINS{0, 0, 0, 0};
-    DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-    DWORD backdropType = static_cast<DWORD>(DWMSBT_NONE);
-    switch (mode) {
-    case core::BackdropMode::Acrylic:
-        backdropType = static_cast<DWORD>(DWMSBT_TRANSIENTWINDOW);
-        break;
-    case core::BackdropMode::Mica:
-        backdropType = static_cast<DWORD>(DWMSBT_MAINWINDOW);
-        break;
-    case core::BackdropMode::MicaAlt:
-        backdropType = static_cast<DWORD>(DWMSBT_TABBEDWINDOW);
-        break;
-    case core::BackdropMode::Wallpaper:
-    case core::BackdropMode::Gradient:
-        backdropType = static_cast<DWORD>(DWMSBT_NONE);
-        break;
-    }
-
-    const HRESULT hr =
-        DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdropType, sizeof(backdropType));
-    return wantsSystemBackdrop && SUCCEEDED(hr);
+    return (mode == core::BackdropMode::Acrylic || mode == core::BackdropMode::Mica ||
+            mode == core::BackdropMode::MicaAlt);
 }
 
 } // namespace geekdesk::platform

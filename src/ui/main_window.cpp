@@ -39,6 +39,7 @@ constexpr UINT kMsgMiddleClick = WM_APP + 1;
 constexpr UINT kMsgTrayIcon = WM_APP + 2;
 constexpr UINT kMsgIconReady = WM_APP + 3;
 constexpr UINT kMsgFolderChanged = WM_APP + 4;
+constexpr UINT kMsgRender = WM_APP + 104;
 
 constexpr UINT_PTR kTimerCaret = 1;
 constexpr UINT_PTR kTimerHoverGroup = 2;
@@ -267,7 +268,7 @@ bool MainWindow::Create(HINSTANCE hInstance, bool registerSystemHooks) {
     const int initH = core::DipToPhysicalPx(settings_.window.height, dpi_);
     const auto initPos = core::ComputeCenteredPosition(initW, initH, metrics.workArea);
 
-    DWORD exStyle = WS_EX_TOOLWINDOW;
+    DWORD exStyle = WS_EX_TOOLWINDOW | WS_EX_LAYERED;
     if (settings_.window.alwaysTopmost) {
         exStyle |= WS_EX_TOPMOST;
     }
@@ -329,7 +330,7 @@ bool MainWindow::Create(HINSTANCE hInstance, bool registerSystemHooks) {
             if (dropHighlightGroupIdx_ != -1 || dropHighlightGrid_) {
                 dropHighlightGroupIdx_ = -1;
                 dropHighlightGrid_ = false;
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
         };
         dtCb.onDrop = [this](POINT screenPt, const std::vector<std::filesystem::path>& paths) {
@@ -379,22 +380,24 @@ void MainWindow::ShowAndPosition() {
 
     const HWND zOrder = settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST;
     suppressSizePersist_ = true;
-    SetWindowPos(hwnd_, zOrder, pos.x, pos.y, widthPx, heightPx, SWP_SHOWWINDOW);
+    SetWindowPos(hwnd_, zOrder, pos.x, pos.y, widthPx, heightPx, SWP_NOACTIVATE);
     suppressSizePersist_ = false;
 
     ApplyBackdropAndPalette();
+    (void)PresentLayeredFrame();
+    ShowWindow(hwnd_, SW_SHOW);
     lastShownTickMs_ = GetTickCount64();
     ForceWindowForeground(hwnd_);
 
     caretVisible_ = true;
     SetTimer(hwnd_, kTimerCaret, 530, nullptr);
-    InvalidateRect(hwnd_, nullptr, FALSE);
 }
 
 void MainWindow::HideWindow() {
     if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
         return;
     }
+    renderPending_ = false;
     KillTimer(hwnd_, kTimerCaret);
     KillTimer(hwnd_, kTimerHoverGroup);
     imeCompWide_.clear();
@@ -422,7 +425,7 @@ bool MainWindow::RenderSmokeFrame() {
         return false;
     }
     ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-    const bool updated = (UpdateWindow(hwnd_) != FALSE);
+    const bool updated = PresentLayeredFrame();
     HideWindow();
     return updated;
 }
@@ -472,7 +475,7 @@ SoakReport MainWindow::RunSoakCycles(int cycles) {
 
     auto runStep = [&](int i) {
         ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-        UpdateWindow(hwnd_);
+        (void)PresentLayeredFrame();
 
         if (!catalog_.groups.empty()) {
             const std::size_t nextGrp = static_cast<std::size_t>(i) % catalog_.groups.size();
@@ -486,7 +489,7 @@ SoakReport MainWindow::RunSoakCycles(int cycles) {
             next.appearance.backgroundOpacity = 0.25 + 0.15 * static_cast<double>((i / 4) % 5);
             next.appearance.cardOpacity = 0.10 + 0.15 * static_cast<double>((i / 4) % 4);
             ApplySettingsLive(next);
-            UpdateWindow(hwnd_);
+            (void)PresentLayeredFrame();
         }
 
         if ((i % 25) == 0) {
@@ -516,7 +519,7 @@ SoakReport MainWindow::RunSoakCycles(int cycles) {
     for (std::size_t gi = 0; gi < catalog_.groups.size(); ++gi) {
         SelectGroup(gi, false);
         ShowWindow(hwnd_, SW_SHOWNOACTIVATE);
-        UpdateWindow(hwnd_);
+        (void)PresentLayeredFrame();
         HideWindow();
     }
     pumpWindowQueue();
@@ -626,8 +629,26 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_ERASEBKGND:
         return 1;
 
-    case WM_PAINT:
-        OnPaint();
+    case WM_PAINT: {
+        PAINTSTRUCT ps{};
+        BeginPaint(hwnd_, &ps);
+        EndPaint(hwnd_, &ps);
+        return 0;
+    }
+
+    case kMsgRender:
+        renderPending_ = false;
+        if (IsWindowVisible(hwnd_)) {
+            (void)PresentLayeredFrame();
+        }
+        return 0;
+
+    case WM_MOVE:
+        if (IsWindowVisible(hwnd_) &&
+            (settings_.appearance.backdrop == core::BackdropMode::Mica ||
+             settings_.appearance.backdrop == core::BackdropMode::MicaAlt)) {
+            RequestRender();
+        }
         return 0;
 
     case WM_SIZE:
@@ -644,15 +665,21 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                          SWP_NOZORDER | SWP_NOACTIVATE);
             suppressSizePersist_ = false;
         }
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        if (IsWindowVisible(hwnd_)) {
+            (void)PresentLayeredFrame();
+        }
         return 0;
     }
 
     case WM_SETTINGCHANGE:
-        if (lParam != 0 &&
-            std::wstring_view(reinterpret_cast<const wchar_t*>(lParam)) == L"ImmersiveColorSet") {
+        if (wParam == SPI_SETDESKWALLPAPER) {
+            renderer_.InvalidateDesktopWallpaperCache();
+            RequestRender();
+        } else if (lParam != 0 &&
+                   std::wstring_view(reinterpret_cast<const wchar_t*>(lParam)) ==
+                       L"ImmersiveColorSet") {
             ApplyBackdropAndPalette();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
         return 0;
 
@@ -714,7 +741,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case WM_IME_ENDCOMPOSITION:
         imeCompWide_.clear();
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         break;
 
     case WM_HOTKEY:
@@ -735,7 +762,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case kMsgIconReady:
         if (IsWindowVisible(hwnd_)) {
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
         return 0;
 
@@ -759,7 +786,7 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         if (wParam == kTimerCaret) {
             if (searchFocused_) {
                 caretVisible_ = !caretVisible_;
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
         } else if (wParam == kTimerHoverGroup) {
             KillTimer(hwnd_, kTimerHoverGroup);
@@ -800,48 +827,72 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
     return DefWindowProcW(hwnd_, msg, wParam, lParam);
 }
 
-void MainWindow::OnPaint() {
-    PAINTSTRUCT ps{};
-    HDC hdc = BeginPaint(hwnd_, &ps);
-    RECT rc{};
-    GetClientRect(hwnd_, &rc);
-    const int widthPx = rc.right - rc.left;
-    const int heightPx = rc.bottom - rc.top;
+void MainWindow::RequestRender() {
+    if (hwnd_ == nullptr || !IsWindowVisible(hwnd_)) {
+        return;
+    }
+    if (!renderPending_) {
+        renderPending_ = true;
+        PostMessageW(hwnd_, kMsgRender, 0, 0);
+    }
+}
 
-    if (hdc != nullptr && widthPx > 0 && heightPx > 0) {
-        RenderState state;
-        state.settings = &settings_;
-        state.palette = &palette_;
-        state.groups = &catalog_.groups;
-        state.activeGroupIndex = activeGroupIndex_;
-        state.displayedItems = &displayedItems_;
-        state.isSearchActive = !searchQueryWide_.empty();
-        state.searchQueryWide = searchQueryWide_;
-        state.imeCompWide = imeCompWide_;
-        state.searchCaretIndex = searchCaretIndex_;
-        state.searchFocused = searchFocused_;
-        state.caretVisible = caretVisible_;
-        state.scrollOffsetDip = scrollOffsetDip_;
-        state.hoveredGroupIdx = hoveredGroupIdx_;
-        state.hoveredTileIdx = hoveredTileIdx_;
-        state.selectedTileIdx = selectedTileIdx_;
-        state.dropHighlightGroupIdx = dropHighlightGroupIdx_;
-        state.dropHighlightGrid = dropHighlightGrid_;
-        state.draggingTileIdx = (dragActive_ && dragCandidate_ == DragKind::Tile) ? dragStartIndex_ : -1;
-        state.dragTargetTileIdx = (dragActive_ && dragCandidate_ == DragKind::Tile) ? dragTargetTileIdx_ : -1;
-        state.draggingGroupIdx = (dragActive_ && dragCandidate_ == DragKind::Group) ? dragStartIndex_ : -1;
-        state.dragTargetGroupIdx = dragActive_ ? dragTargetGroupIdx_ : -1;
-        state.hoveredHeaderButton = hoveredHeaderBtn_;
-        state.alwaysTopmost = settings_.window.alwaysTopmost;
-        state.statusText = statusText_;
-        state.dataRoot = dataRoot_;
-        state.iconCache = &iconCache_;
-
-        renderer_.Render(hdc, widthPx, heightPx, dpi_, state, layout_);
-        scrollOffsetDip_ = layout_.clampedScrollDip;
+bool MainWindow::PresentLayeredFrame() {
+    if (hwnd_ == nullptr) {
+        return false;
+    }
+    RECT winRc{};
+    if (!GetWindowRect(hwnd_, &winRc)) {
+        return false;
+    }
+    const int widthPx = winRc.right - winRc.left;
+    const int heightPx = winRc.bottom - winRc.top;
+    if (widthPx <= 0 || heightPx <= 0) {
+        return false;
     }
 
-    EndPaint(hwnd_, &ps);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    RECT monitorRc = winRc;
+    if (HMONITOR mon = MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST);
+        mon != nullptr && GetMonitorInfoW(mon, &mi) != FALSE) {
+        monitorRc = mi.rcMonitor;
+    }
+
+    RenderState state;
+    state.settings = &settings_;
+    state.palette = &palette_;
+    state.groups = &catalog_.groups;
+    state.activeGroupIndex = activeGroupIndex_;
+    state.displayedItems = &displayedItems_;
+    state.isSearchActive = !searchQueryWide_.empty();
+    state.searchQueryWide = searchQueryWide_;
+    state.imeCompWide = imeCompWide_;
+    state.searchCaretIndex = searchCaretIndex_;
+    state.searchFocused = searchFocused_;
+    state.caretVisible = caretVisible_;
+    state.scrollOffsetDip = scrollOffsetDip_;
+    state.hoveredGroupIdx = hoveredGroupIdx_;
+    state.hoveredTileIdx = hoveredTileIdx_;
+    state.selectedTileIdx = selectedTileIdx_;
+    state.dropHighlightGroupIdx = dropHighlightGroupIdx_;
+    state.dropHighlightGrid = dropHighlightGrid_;
+    state.draggingTileIdx = (dragActive_ && dragCandidate_ == DragKind::Tile) ? dragStartIndex_ : -1;
+    state.dragTargetTileIdx = (dragActive_ && dragCandidate_ == DragKind::Tile) ? dragTargetTileIdx_ : -1;
+    state.draggingGroupIdx = (dragActive_ && dragCandidate_ == DragKind::Group) ? dragStartIndex_ : -1;
+    state.dragTargetGroupIdx = dragActive_ ? dragTargetGroupIdx_ : -1;
+    state.hoveredHeaderButton = hoveredHeaderBtn_;
+    state.alwaysTopmost = settings_.window.alwaysTopmost;
+    state.statusText = statusText_;
+    state.dataRoot = dataRoot_;
+    state.iconCache = &iconCache_;
+    state.windowScreenRect = winRc;
+    state.monitorScreenRect = monitorRc;
+
+    const bool ok =
+        renderer_.RenderToLayeredWindow(hwnd_, widthPx, heightPx, dpi_, state, layout_);
+    scrollOffsetDip_ = layout_.clampedScrollDip;
+    return ok;
 }
 
 void MainWindow::OnResizeOrDpiChanged() {
@@ -862,7 +913,9 @@ void MainWindow::OnResizeOrDpiChanged() {
         settings_.window.height = hDip;
         ScheduleSaveSettings();
     }
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    if (IsWindowVisible(hwnd_)) {
+        (void)PresentLayeredFrame();
+    }
 }
 
 void MainWindow::OnMouseMove(int xPx, int yPx) {
@@ -912,7 +965,7 @@ void MainWindow::OnMouseMove(int xPx, int yPx) {
             if (nextTargetGrp != dragTargetGroupIdx_ || nextTargetTile != dragTargetTileIdx_) {
                 dragTargetGroupIdx_ = nextTargetGrp;
                 dragTargetTileIdx_ = nextTargetTile;
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
             return;
         }
@@ -937,7 +990,7 @@ void MainWindow::OnMouseMove(int xPx, int yPx) {
     hoveredHeaderBtn_ = newBtn;
 
     if (changed) {
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 
@@ -949,7 +1002,7 @@ void MainWindow::OnMouseLeave() {
         hoveredGroupIdx_ = -1;
         hoveredTileIdx_ = -1;
         hoveredHeaderBtn_ = HeaderButton::None;
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 
@@ -971,7 +1024,7 @@ void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
             SetWindowPos(hwnd_, settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0,
                          0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             ScheduleSaveSettings();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         } else if (btn == HeaderButton::Refresh) {
             SyncAllLinkedFolders(true);
         } else if (btn == HeaderButton::Settings) {
@@ -987,7 +1040,7 @@ void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
         searchCaretIndex_ = searchQueryWide_.size();
         caretVisible_ = true;
         SetTimer(hwnd_, kTimerCaret, 530, nullptr);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
@@ -1015,11 +1068,11 @@ void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
         dragTargetGroupIdx_ = -1;
         dragTargetTileIdx_ = -1;
         SetCapture(hwnd_);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    RequestRender();
 }
 
 void MainWindow::OnLeftButtonUp(int xPx, int yPx) {
@@ -1078,7 +1131,7 @@ void MainWindow::OnLeftButtonUp(int xPx, int yPx) {
                 }
             }
         }
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
@@ -1148,7 +1201,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 RebuildDisplayedItems();
                 ScheduleSaveSettings();
                 ScheduleSaveCatalog();
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
             break;
         }
@@ -1177,7 +1230,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                     RebuildDisplayedItems();
                     ScheduleSaveSettings();
                     ScheduleSaveCatalog();
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    RequestRender();
                 }
             }
             break;
@@ -1193,7 +1246,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                         searchEngine_.Rebuild(catalog_);
                         RebuildDisplayedItems();
                         ScheduleSaveCatalog();
-                        InvalidateRect(hwnd_, nullptr, FALSE);
+                        RequestRender();
                     }
                 }
             }
@@ -1209,7 +1262,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 ScheduleSaveCatalog();
                 statusText_ = "\u540C\u6B65\u5B8C\u6210 (+" + std::to_string(res.added) + " / -" +
                               std::to_string(res.removed) + ")";
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
             break;
         case GroupMenuAction::MoveGroupUp:
@@ -1222,7 +1275,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                     ScheduleSaveSettings();
                     ScheduleSaveCatalog();
                     RebuildDisplayedItems();
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    RequestRender();
                 }
             }
             break;
@@ -1236,7 +1289,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                     ScheduleSaveSettings();
                     ScheduleSaveCatalog();
                     RebuildDisplayedItems();
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    RequestRender();
                 }
             }
             break;
@@ -1257,7 +1310,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                     RebuildDisplayedItems();
                     ScheduleSaveSettings();
                     ScheduleSaveCatalog();
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    RequestRender();
                 }
             }
             break;
@@ -1316,7 +1369,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 } else {
                     statusText_ = "\u63D0\u6743\u542F\u52A8\u5931\u8D25: " + lr.error;
                 }
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
             break;
         case ItemMenuAction::OpenLocation:
@@ -1340,7 +1393,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                     iconCache_.ClearMemoryCache();
                     RebuildDisplayedItems();
                     ScheduleSaveCatalog();
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    RequestRender();
                 }
             }
             break;
@@ -1349,7 +1402,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 auto& item = catalog_.groups[targetGroupIdx].items[targetItemIdx];
                 item.runAsAdmin = !item.runAsAdmin;
                 ScheduleSaveCatalog();
-                InvalidateRect(hwnd_, nullptr, FALSE);
+                RequestRender();
             }
             break;
         case ItemMenuAction::DeleteItem:
@@ -1359,7 +1412,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                     searchEngine_.Rebuild(catalog_);
                     RebuildDisplayedItems();
                     ScheduleSaveCatalog();
-                    InvalidateRect(hwnd_, nullptr, FALSE);
+                    RequestRender();
                 }
             }
             break;
@@ -1375,7 +1428,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                         searchEngine_.Rebuild(catalog_);
                         RebuildDisplayedItems();
                         ScheduleSaveCatalog();
-                        InvalidateRect(hwnd_, nullptr, FALSE);
+                        RequestRender();
                     }
                 }
             }
@@ -1392,7 +1445,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                         searchEngine_.Rebuild(catalog_);
                         RebuildDisplayedItems();
                         ScheduleSaveCatalog();
-                        InvalidateRect(hwnd_, nullptr, FALSE);
+                        RequestRender();
                     }
                 }
             }
@@ -1411,7 +1464,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                         searchEngine_.Rebuild(catalog_);
                         RebuildDisplayedItems();
                         ScheduleSaveCatalog();
-                        InvalidateRect(hwnd_, nullptr, FALSE);
+                        RequestRender();
                     }
                 }
             }
@@ -1433,7 +1486,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
             RebuildDisplayedItems();
             ScheduleSaveSettings();
             ScheduleSaveCatalog();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
             break;
         }
         }
@@ -1465,7 +1518,7 @@ void MainWindow::OnMouseWheel(int xScreenPx, int yScreenPx, short wheelDelta) {
     }
 
     scrollOffsetDip_ = std::clamp(scrollOffsetDip_ - step, 0.0f, layout_.maxScrollDip);
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    RequestRender();
 }
 
 void MainWindow::OnKeyDown(WPARAM vk) {
@@ -1476,7 +1529,7 @@ void MainWindow::OnKeyDown(WPARAM vk) {
         searchCaretIndex_ = searchQueryWide_.size();
         caretVisible_ = true;
         SetTimer(hwnd_, kTimerCaret, 530, nullptr);
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
@@ -1493,7 +1546,7 @@ void MainWindow::OnKeyDown(WPARAM vk) {
             searchCaretIndex_ = pos + clip.size();
             scrollOffsetDip_ = 0.0f;
             RebuildDisplayedItems();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
         return;
     }
@@ -1504,7 +1557,7 @@ void MainWindow::OnKeyDown(WPARAM vk) {
             searchCaretIndex_ = 0;
             scrollOffsetDip_ = 0.0f;
             RebuildDisplayedItems();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
         return;
     }
@@ -1515,7 +1568,7 @@ void MainWindow::OnKeyDown(WPARAM vk) {
             searchCaretIndex_ = 0;
             scrollOffsetDip_ = 0.0f;
             RebuildDisplayedItems();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         } else {
             HideWindow();
         }
@@ -1542,7 +1595,7 @@ void MainWindow::OnKeyDown(WPARAM vk) {
             searchCaretIndex_ = pos - 1;
             scrollOffsetDip_ = 0.0f;
             RebuildDisplayedItems();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
         return;
     }
@@ -1552,19 +1605,19 @@ void MainWindow::OnKeyDown(WPARAM vk) {
             searchQueryWide_.erase(searchCaretIndex_, 1);
             scrollOffsetDip_ = 0.0f;
             RebuildDisplayedItems();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
         return;
     }
 
     if (vk == VK_HOME && searchFocused_) {
         searchCaretIndex_ = 0;
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
     if (vk == VK_END && searchFocused_) {
         searchCaretIndex_ = searchQueryWide_.size();
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
@@ -1589,7 +1642,7 @@ void MainWindow::OnKeyDown(WPARAM vk) {
         }
         selectedTileIdx_ = cur;
         EnsureTileVisible(static_cast<std::size_t>(cur));
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 
@@ -1612,7 +1665,7 @@ void MainWindow::OnChar(wchar_t ch) {
     searchCaretIndex_ = pos + 1;
     scrollOffsetDip_ = 0.0f;
     RebuildDisplayedItems();
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    RequestRender();
 }
 
 void MainWindow::OnImeStartComposition() {
@@ -1638,7 +1691,7 @@ void MainWindow::OnImeComposition(LPARAM lParam) {
             }
             ImmReleaseContext(hwnd_, himc);
             UpdateImeCandidateWindowPosition();
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
     }
 }
@@ -1757,7 +1810,7 @@ void MainWindow::SelectGroup(std::size_t index, bool persistSelection) {
         imeCompWide_.clear();
     }
     RebuildDisplayedItems();
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    RequestRender();
 }
 
 void MainWindow::SwitchGroupByDelta(int delta) {
@@ -1798,7 +1851,7 @@ void MainWindow::LaunchDisplayedIndex(std::size_t index) {
         if (logger_ != nullptr) {
             logger_->Warn("Launch failed for '" + mutableItem->name + "': " + lr.error);
         }
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
@@ -1818,7 +1871,7 @@ void MainWindow::LaunchDisplayedIndex(std::size_t index) {
     if (settings_.window.hidePolicy == core::HidePolicy::AfterLaunch) {
         HideWindow();
     } else {
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 
@@ -1846,7 +1899,7 @@ void MainWindow::SyncAllLinkedFolders(bool showFeedback) {
                       " / -" + std::to_string(totalRemoved) + ")";
     }
     if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 
@@ -2006,7 +2059,7 @@ void MainWindow::OnFolderChangedNotifications() {
         statusText_ = "\u76EE\u5F55\u5DF2\u81EA\u52A8\u540C\u6B65 (+" + std::to_string(addedTotal) +
                       " / -" + std::to_string(removedTotal) + ")";
         if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
-            InvalidateRect(hwnd_, nullptr, FALSE);
+            RequestRender();
         }
     }
 }
@@ -2123,8 +2176,8 @@ void MainWindow::ApplySettingsLive(const core::AppSettings& next) {
     ApplyBackdropAndPalette();
     RebuildDisplayedItems();
     ScheduleSaveSettings();
-    if (hwnd_ != nullptr) {
-        InvalidateRect(hwnd_, nullptr, FALSE);
+    if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+        (void)PresentLayeredFrame();
     }
 }
 
@@ -2162,7 +2215,9 @@ void MainWindow::ApplyBackupRestored(const core::AppSettings& nextSettings,
     if (logger_ != nullptr) {
         logger_->Info("Backup restored cleanly; groups=" + std::to_string(catalog_.groups.size()));
     }
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
+        (void)PresentLayeredFrame();
+    }
 }
 
 void MainWindow::HandleExternalDropHover(POINT screenPt, bool& outAccepted) {
@@ -2191,7 +2246,7 @@ void MainWindow::HandleExternalDropHover(POINT screenPt, bool& outAccepted) {
     if (nextDropGrp != dropHighlightGroupIdx_ || nextDropGrid != dropHighlightGrid_) {
         dropHighlightGroupIdx_ = nextDropGrp;
         dropHighlightGrid_ = nextDropGrid;
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 
@@ -2213,7 +2268,7 @@ void MainWindow::HandleExternalDropFiles(POINT screenPt,
     if (targetGroupIdx >= catalog_.groups.size() ||
         catalog_.groups[targetGroupIdx].kind != core::GroupKind::Manual) {
         statusText_ = "\u5173\u8054\u6587\u4EF6\u5939\u5206\u7EC4\u4E0D\u652F\u6301\u62D6\u5165\u6DFB\u52A0";
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
         return;
     }
 
@@ -2239,7 +2294,7 @@ void MainWindow::HandleExternalDropFiles(POINT screenPt,
     } else {
         statusText_ = "\u62D6\u5165\u7684\u6761\u76EE\u5DF2\u5B58\u5728";
     }
-    InvalidateRect(hwnd_, nullptr, FALSE);
+    RequestRender();
 }
 
 void MainWindow::CancelInternalDrag() {
@@ -2249,7 +2304,7 @@ void MainWindow::CancelInternalDrag() {
         dragStartIndex_ = -1;
         dragTargetTileIdx_ = -1;
         dragTargetGroupIdx_ = -1;
-        InvalidateRect(hwnd_, nullptr, FALSE);
+        RequestRender();
     }
 }
 

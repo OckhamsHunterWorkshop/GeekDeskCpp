@@ -522,8 +522,24 @@ TEST_CASE("theme palette maps backgroundOpacity, cardOpacity, and readable contr
     CHECK(low.useNativeBackdrop);
     CHECK(high.windowTint.a > low.windowTint.a + 0.5f);
     CHECK(high.contentCardBg.a > low.contentCardBg.a + 0.5f);
+    CHECK(high.contentCardBg.r > high.windowTint.r + 0.05f);
+
+    // Zero cardOpacity makes contentCardBg and contentCardBorder completely transparent
+    app.cardOpacity = 0.0;
+    const ThemePalette zeroCard = BuildThemePalette(app, true, true);
+    CHECK(zeroCard.contentCardBg.a == doctest::Approx(0.0f));
+    CHECK(zeroCard.contentCardBorder.a == doctest::Approx(0.0f));
+
+    // Mica and MicaAlt produce distinct base tint colors
+    app.backdrop = BackdropMode::Mica;
+    const ThemePalette micaPal = BuildThemePalette(app, true, true);
+    app.backdrop = BackdropMode::MicaAlt;
+    const ThemePalette micaAltPal = BuildThemePalette(app, true, true);
+    CHECK(micaPal.windowTint.b != doctest::Approx(micaAltPal.windowTint.b));
 
     // Fallback when DWM native backdrop is unavailable (e.g. Win10 / Gradient)
+    app.backdrop = BackdropMode::Acrylic;
+    app.cardOpacity = 0.85;
     const ThemePalette win10Fallback = BuildThemePalette(app, true, false);
     CHECK_FALSE(win10Fallback.useNativeBackdrop);
     CHECK(win10Fallback.windowTint.a == doctest::Approx(1.0f));

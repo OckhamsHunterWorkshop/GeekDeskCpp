@@ -102,10 +102,12 @@ struct RenderState {
     std::string statusText;
     std::filesystem::path dataRoot;
     IconCache* iconCache = nullptr;
+    RECT windowScreenRect{};
+    RECT monitorScreenRect{};
 };
 
 /// Mode A Renderer: Win32 DIB Double-Buffer + ID2D1DCRenderTarget (D2D1_RENDER_TARGET_TYPE_SOFTWARE)
-/// + DirectWrite grayscale text. Zero D3D11/DXGI initialization.
+/// + DirectWrite grayscale text + UpdateLayeredWindow (ULW_ALPHA). Zero D3D11/DXGI initialization.
 class D2DRenderer {
 public:
     D2DRenderer() = default;
@@ -125,19 +127,22 @@ public:
                                                       std::size_t itemCount,
                                                       float scrollOffsetDip);
 
-    /// Render current state into the window Paint DC and update outLayout (including search caret).
-    bool Render(HDC targetPaintDc,
-                int widthPx,
-                int heightPx,
-                std::uint32_t dpi,
-                const RenderState& state,
-                LayoutSnapshot& outLayout);
+    /// Render current state into an offscreen 32-bit PBGRA DIB and present via UpdateLayeredWindow.
+    bool RenderToLayeredWindow(HWND hwnd,
+                               int widthPx,
+                               int heightPx,
+                               std::uint32_t dpi,
+                               const RenderState& state,
+                               LayoutSnapshot& outLayout);
 
     /// Free transient DIB backbuffer when the window hides to minimize idle memory.
     void ReleaseBackBuffer();
 
     /// Invalidate cached wallpaper bitmap when appearance changes.
     void InvalidateWallpaperCache();
+
+    /// Invalidate cached desktop Mica backdrop bitmap when OS wallpaper changes.
+    void InvalidateDesktopWallpaperCache();
 
 private:
     bool EnsureFactories();
@@ -147,11 +152,13 @@ private:
     ID2D1Bitmap* GetOrUploadIconBitmap(const core::LaunchItem& item, IconCache& iconCache);
     ID2D1Bitmap* GetOrLoadWallpaperBitmap(const std::filesystem::path& dataRoot,
                                           const std::string& fileName);
+    ID2D1Bitmap* GetOrLoadDesktopMicaBitmap();
 
     platform::ComPtr<ID2D1Factory> factory_;
     platform::ComPtr<IDWriteFactory> dwriteFactory_;
     platform::ComPtr<ID2D1DCRenderTarget> dcTarget_;
     platform::ComPtr<ID2D1SolidColorBrush> solidBrush_;
+    platform::ComPtr<ID2D1Layer> clipLayer_;
 
     platform::ComPtr<IDWriteTextFormat> brandFmt_;
     platform::ComPtr<IDWriteTextFormat> groupFmt_;
@@ -179,6 +186,10 @@ private:
     std::string cachedWallpaperKey_;
     platform::ComPtr<ID2D1Bitmap> wallpaperBitmap_;
     bool wallpaperLoadAttempted_ = false;
+
+    std::string cachedDesktopWallpaperKey_;
+    platform::ComPtr<ID2D1Bitmap> desktopMicaBitmap_;
+    bool desktopMicaLoadAttempted_ = false;
 };
 
 } // namespace geekdesk::ui

@@ -17,10 +17,12 @@ struct ColorRgba {
 
 struct ThemePalette {
     ColorRgba windowTint;
+    ColorRgba windowBorder;
     ColorRgba sidebarBg;
     ColorRgba headerButtonBg;
     ColorRgba headerButtonHoverBg;
     ColorRgba contentCardBg;
+    ColorRgba contentCardBorder;
     ColorRgba tileBg;
     ColorRgba tileHoverBg;
     ColorRgba tileSelectedBg;
