@@ -74,6 +74,20 @@ void DrawCloseIcon(ID2D1RenderTarget* rt, ID2D1Brush* brush, float cx, float cy)
                  1.6f);
 }
 
+void DrawSettingsGearIcon(ID2D1RenderTarget* rt, ID2D1Brush* brush, float cx, float cy) {
+    rt->DrawEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{cx, cy}, 4.5f, 4.5f}, brush, 1.5f);
+    rt->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{cx, cy}, 1.7f, 1.7f}, brush);
+    constexpr float kOuter = 7.0f;
+    constexpr float kInner = 5.0f;
+    for (int i = 0; i < 8; ++i) {
+        const float angle = static_cast<float>(i) * 0.78539816f;
+        const float cs = std::cos(angle);
+        const float sn = std::sin(angle);
+        rt->DrawLine(D2D1_POINT_2F{cx + cs * kInner, cy + sn * kInner},
+                     D2D1_POINT_2F{cx + cs * kOuter, cy + sn * kOuter}, brush, 1.4f);
+    }
+}
+
 void DrawFolderGlyph(ID2D1RenderTarget* rt, ID2D1Brush* brush, float left, float cy) {
     const D2D1_RECT_F tab{left, cy - 5.5f, left + 6.0f, cy - 2.5f};
     const D2D1_RECT_F body{left, cy - 3.5f, left + 13.0f, cy + 5.5f};
@@ -292,7 +306,7 @@ LayoutSnapshot D2DRenderer::ComputeLayout(const core::AppSettings& settings,
     const float btnGap = 6.0f;
     const float btnY = snap.headerRect.top + (kHeaderH - btnSize) * 0.5f;
     float btnRight = snap.headerRect.right;
-    for (int i = 2; i >= 0; --i) {
+    for (int i = 3; i >= 0; --i) {
         snap.headerButtonRects[static_cast<std::size_t>(i)] = {
             btnRight - btnSize, btnY, btnRight, btnY + btnSize};
         btnRight -= (btnSize + btnGap);
@@ -625,8 +639,8 @@ bool D2DRenderer::Render(HDC targetPaintDc,
             solidBrush_.Get(), 1.3f);
     }
 
-    // Header utility buttons: Pin, Refresh, Hide
-    for (int i = 0; i < 3; ++i) {
+    // Header utility buttons: Pin, Refresh, Settings, Hide
+    for (int i = 0; i < 4; ++i) {
         const auto btn = static_cast<HeaderButton>(i);
         const RectDip& r = outLayout.headerButtonRects[static_cast<std::size_t>(i)];
         const bool active = (btn == HeaderButton::Pin && state.alwaysTopmost);
@@ -643,6 +657,8 @@ bool D2DRenderer::Render(HDC targetPaintDc,
             DrawPinIcon(dcTarget_.Get(), solidBrush_.Get(), cx, cy, state.alwaysTopmost);
         } else if (btn == HeaderButton::Refresh) {
             DrawRefreshIcon(dcTarget_.Get(), solidBrush_.Get(), cx, cy);
+        } else if (btn == HeaderButton::Settings) {
+            DrawSettingsGearIcon(dcTarget_.Get(), solidBrush_.Get(), cx, cy);
         } else {
             DrawCloseIcon(dcTarget_.Get(), solidBrush_.Get(), cx, cy);
         }
@@ -660,9 +676,16 @@ bool D2DRenderer::Render(HDC targetPaintDc,
         }
         const bool isActive = (!state.isSearchActive && i == state.activeGroupIndex);
         const bool isHovered = (static_cast<int>(i) == state.hoveredGroupIdx);
-        if (isActive || isHovered) {
-            solidBrush_->SetColor(ToD2D(isActive ? pal.tileSelectedBg : pal.tileHoverBg));
+        const bool isDropHit = (static_cast<int>(i) == state.dropHighlightGroupIdx ||
+                                static_cast<int>(i) == state.dragTargetGroupIdx);
+        if (isActive || isHovered || isDropHit) {
+            solidBrush_->SetColor(
+                ToD2D((isActive || isDropHit) ? pal.tileSelectedBg : pal.tileHoverBg));
             dcTarget_->FillRoundedRectangle(ToRounded(r, 6.0f, 6.0f), solidBrush_.Get());
+        }
+        if (isDropHit) {
+            solidBrush_->SetColor(ToD2D(pal.accent));
+            dcTarget_->DrawRoundedRectangle(ToRounded(r, 6.0f, 6.0f), solidBrush_.Get(), 1.5f);
         }
         if (isActive) {
             solidBrush_->SetColor(ToD2D(pal.accent));
@@ -677,6 +700,11 @@ bool D2DRenderer::Render(HDC targetPaintDc,
         const float cy = (r.top + r.bottom) * 0.5f;
         solidBrush_->SetColor(ToD2D(isActive ? pal.accent : pal.textSecondary));
         DrawFolderGlyph(dcTarget_.Get(), solidBrush_.Get(), r.left + 12.0f, cy);
+        if (grp.kind == core::GroupKind::LinkedFolder) {
+            solidBrush_->SetColor(ToD2D(pal.accent));
+            dcTarget_->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{r.left + 24.5f, cy + 4.5f}, 2.2f, 2.2f},
+                                   solidBrush_.Get());
+        }
 
         const RectDip nameRect{r.left + 32.0f, r.top, r.right - 34.0f, r.bottom};
         const std::wstring wName = core::utf8::Utf8ToWide(grp.name);
@@ -695,6 +723,11 @@ bool D2DRenderer::Render(HDC targetPaintDc,
     solidBrush_->SetColor(ToD2D(pal.contentCardBg));
     dcTarget_->FillRoundedRectangle(ToRounded(outLayout.contentCardRect, 10.0f, 10.0f),
                                     solidBrush_.Get());
+    if (state.dropHighlightGrid) {
+        solidBrush_->SetColor(ToD2D(pal.accent));
+        dcTarget_->DrawRoundedRectangle(ToRounded(outLayout.contentCardRect, 10.0f, 10.0f),
+                                        solidBrush_.Get(), 2.0f);
+    }
 
     dcTarget_->PushAxisAlignedClip(ToRect(outLayout.gridViewportRect),
                                    D2D1_ANTIALIAS_MODE_ALIASED);
@@ -720,14 +753,31 @@ bool D2DRenderer::Render(HDC targetPaintDc,
 
             const bool isSelected = (static_cast<int>(i) == state.selectedTileIdx);
             const bool isHovered = (static_cast<int>(i) == state.hoveredTileIdx);
-            if (isSelected || isHovered) {
-                solidBrush_->SetColor(ToD2D(isSelected ? pal.tileSelectedBg : pal.tileHoverBg));
+            const bool isDragSrc = (static_cast<int>(i) == state.draggingTileIdx);
+            if (isSelected || isHovered || isDragSrc) {
+                solidBrush_->SetColor(
+                    ToD2D(isSelected ? pal.tileSelectedBg
+                                     : ToD2D(pal.tileHoverBg, isDragSrc ? 0.5f : 1.0f).a > 0.0f
+                                           ? pal.tileHoverBg
+                                           : pal.tileHoverBg));
                 dcTarget_->FillRoundedRectangle(ToRounded(tile, 8.0f, 8.0f), solidBrush_.Get());
                 if (isSelected) {
                     solidBrush_->SetColor(ToD2D(pal.accent, 0.7f));
                     dcTarget_->DrawRoundedRectangle(ToRounded(tile, 8.0f, 8.0f),
                                                     solidBrush_.Get(), 1.2f);
                 }
+            }
+            if (state.dragTargetTileIdx >= 0 && static_cast<int>(i) == state.dragTargetTileIdx &&
+                state.draggingTileIdx >= 0 && state.dragTargetTileIdx != state.draggingTileIdx) {
+                const float barX =
+                    (state.dragTargetTileIdx > state.draggingTileIdx) ? (tile.right + 3.0f)
+                                                                      : (tile.left - 3.0f);
+                solidBrush_->SetColor(ToD2D(pal.accent));
+                dcTarget_->FillRoundedRectangle(
+                    D2D1_ROUNDED_RECT{D2D1_RECT_F{barX - 1.5f, tile.top + 6.0f, barX + 1.5f,
+                                                  tile.bottom - 6.0f},
+                                      1.5f, 1.5f},
+                    solidBrush_.Get());
             }
 
             const auto& view = (*state.displayedItems)[i];

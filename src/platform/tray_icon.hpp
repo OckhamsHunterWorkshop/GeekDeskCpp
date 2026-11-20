@@ -9,10 +9,11 @@ namespace geekdesk::platform {
 
 enum class TrayCommand : UINT {
     ToggleWindow = 1001,
-    SyncCatalog = 1002,
-    OpenDataDir = 1003,
-    ToggleAutoStart = 1004,
-    Exit = 1005,
+    OpenSettings = 1002,
+    SyncCatalog = 1003,
+    OpenDataDir = 1004,
+    ToggleAutoStart = 1005,
+    Exit = 1006,
 };
 
 /// System tray notification icon manager (Shell_NotifyIconW) with TaskbarCreated recovery.

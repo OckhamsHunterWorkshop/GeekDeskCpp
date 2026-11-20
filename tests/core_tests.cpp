@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest.h>
 
+#include "core/catalog_mutator.hpp"
 #include "core/catalog_sorter.hpp"
 #include "core/folder_sync.hpp"
 #include "core/hotkey_parser.hpp"
@@ -9,6 +10,7 @@
 #include "core/placement_math.hpp"
 #include "core/search_engine.hpp"
 #include "core/utf8.hpp"
+#include "platform/folder_watcher.hpp"
 #include "storage/atomic_writer.hpp"
 #include "storage/backup_manager.hpp"
 #include "storage/json_codec.hpp"
@@ -20,7 +22,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -585,4 +589,85 @@ TEST_CASE("icon cropper removes faint Shell outer rims separated by transparent 
     const BgraImage keptFull = TrimIconPadding(fullBleed);
     CHECK(keptFull.width == 128);
     CHECK(keptFull.height == 128);
+}
+
+TEST_CASE("catalog mutator supports group/item CRUD, deduplication, reordering, and LinkedFolder guards") {
+    CatalogDocument doc = CatalogDocument::CreateDefault();
+    REQUIRE(doc.groups.size() == 1);
+
+    const std::size_t g2 = AddManualGroup(doc, "DevTools");
+    CHECK(g2 == 1);
+    CHECK(RenameGroup(doc, g2, "Development"));
+    CHECK(doc.groups[g2].name == "Development");
+    CHECK_FALSE(RenameGroup(doc, g2, "   "));
+
+    TempDirGuard linkedDir("mutator_linked");
+    REQUIRE(WriteFileAtomic(linkedDir.path / L"SampleTool.exe", "bin").ok);
+    const std::size_t g3 = AddLinkedFolderGroup(doc, "ToolsDir", utf8::PathToUtf8(linkedDir.path));
+    CHECK(g3 == 2);
+    CHECK(doc.groups[g3].kind == GroupKind::LinkedFolder);
+    CHECK(doc.groups[g3].items.size() == 1);
+
+    LaunchItem it1;
+    it1.name = "AppA";
+    it1.targetPath = "C:\\Apps\\A.exe";
+    CHECK(AddItemToManualGroup(doc.groups[0], it1, true));
+    // Case-insensitive duplicate rejected
+    LaunchItem dup = it1;
+    dup.targetPath = "c:\\apps\\a.exe";
+    CHECK_FALSE(AddItemToManualGroup(doc.groups[0], dup, true));
+
+    // Reject manual insertion/removal on LinkedFolder group
+    CHECK_FALSE(AddItemToManualGroup(doc.groups[g3], it1, true));
+    CHECK_FALSE(RemoveItemFromManualGroup(doc.groups[g3], 0));
+
+    LaunchItem it2;
+    it2.name = "AppB";
+    it2.targetPath = "C:\\Apps\\B.exe";
+    CHECK(AddItemToManualGroup(doc.groups[0], it2, true));
+    CHECK(ReorderItem(doc.groups[0].items, 0, 1));
+    CHECK(doc.groups[0].items[0].name == "AppB");
+
+    CHECK(MoveItemBetweenManualGroups(doc, 0, 0, g2));
+    CHECK(doc.groups[0].items.size() == 1);
+    CHECK(doc.groups[g2].items.size() == 1);
+    CHECK(doc.groups[g2].items[0].name == "AppB");
+
+    // Reorder groups and verify last-group deletion restores fallback group
+    CHECK(ReorderGroup(doc.groups, 2, 0));
+    CHECK(doc.groups[0].name == "ToolsDir");
+    CHECK(DeleteGroup(doc, 0));
+    CHECK(DeleteGroup(doc, 0));
+    CHECK(DeleteGroup(doc, 0));
+    CHECK(doc.groups.size() == 1);
+}
+
+TEST_CASE("folder watcher detects real-time directory additions with debouncing and stops cleanly") {
+    TempDirGuard watchDir("watcher");
+
+    std::mutex mu;
+    std::condition_variable cv;
+    std::vector<std::string> events;
+
+    {
+        geekdesk::platform::FolderWatcher watcher;
+        watcher.Start({{"grp-watch", watchDir.path}},
+                      [&](const std::string& groupId) {
+                          std::lock_guard<std::mutex> lock(mu);
+                          events.push_back(groupId);
+                          cv.notify_all();
+                      },
+                      std::chrono::milliseconds(80));
+
+        REQUIRE(WriteFileAtomic(watchDir.path / L"NewApp1.exe", "1").ok);
+        REQUIRE(WriteFileAtomic(watchDir.path / L"NewApp2.exe", "2").ok);
+
+        std::unique_lock<std::mutex> lock(mu);
+        const bool notified = cv.wait_for(lock, std::chrono::seconds(3),
+                                          [&]() { return !events.empty(); });
+        REQUIRE(notified);
+        CHECK(events[0] == "grp-watch");
+        // Debounce window should coalesce both rapid writes cleanly
+        CHECK(events.size() <= 2);
+    }
 }

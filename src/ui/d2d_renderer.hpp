@@ -41,7 +41,8 @@ enum class HeaderButton : int {
     None = -1,
     Pin = 0,
     Refresh = 1,
-    Hide = 2,
+    Settings = 2,
+    Hide = 3,
 };
 
 struct DisplayedItemView {
@@ -55,7 +56,7 @@ struct LayoutSnapshot {
     RectDip headerRect;
     RectDip brandRect;
     RectDip searchBoxRect;
-    std::array<RectDip, 3> headerButtonRects{};
+    std::array<RectDip, 4> headerButtonRects{};
     RectDip sidebarRect;
     std::vector<RectDip> groupRects;
     RectDip contentCardRect;
@@ -90,6 +91,12 @@ struct RenderState {
     int hoveredGroupIdx = -1;
     int hoveredTileIdx = -1;
     int selectedTileIdx = -1;
+    int dropHighlightGroupIdx = -1;
+    bool dropHighlightGrid = false;
+    int draggingTileIdx = -1;
+    int dragTargetTileIdx = -1;
+    int draggingGroupIdx = -1;
+    int dragTargetGroupIdx = -1;
     HeaderButton hoveredHeaderButton = HeaderButton::None;
     bool alwaysTopmost = false;
     std::string statusText;

@@ -13,7 +13,8 @@
 #define PSAPI_VERSION 2
 #endif
 #include <windows.h>
-#include <objbase.h>
+#include <commctrl.h>
+#include <ole2.h>
 #include <psapi.h>
 #include <shellapi.h>
 
@@ -80,11 +81,11 @@ private:
 struct ComInitGuard {
     HRESULT hr = E_FAIL;
     ComInitGuard() {
-        hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        hr = OleInitialize(nullptr);
     }
     ~ComInitGuard() {
         if (SUCCEEDED(hr)) {
-            CoUninitialize();
+            OleUninitialize();
         }
     }
 };
@@ -253,6 +254,11 @@ int RunSmokeUi(HINSTANCE hInstance,
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     ComInitGuard comGuard;
 
+    INITCOMMONCONTROLSEX icc{};
+    icc.dwSize = sizeof(icc);
+    icc.dwICC = ICC_STANDARD_CLASSES | ICC_TAB_CLASSES | ICC_BAR_CLASSES;
+    InitCommonControlsEx(&icc);
+
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     std::vector<std::wstring> args;
@@ -348,6 +354,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+        const HWND settingsHwnd = mainWindow.SettingsHandle();
+        if (settingsHwnd != nullptr && IsDialogMessageW(settingsHwnd, &msg)) {
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

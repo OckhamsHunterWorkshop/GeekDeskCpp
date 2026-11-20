@@ -100,6 +100,8 @@ std::optional<TrayCommand> TrayIcon::ShowContextMenu(HWND hwnd, bool autoStartCh
 
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::ToggleWindow),
                 L"\u663E\u793A / \u9690\u85CF\u4E3B\u9762\u677F");
+    AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::OpenSettings),
+                L"\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D...");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::SyncCatalog),
                 L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939");
     AppendMenuW(menu, MF_STRING, static_cast<UINT_PTR>(TrayCommand::OpenDataDir),

@@ -27,12 +27,14 @@ endif()
 add_library(geekdesk_core STATIC
     src/core/utf8.cpp
     src/core/models.cpp
+    src/core/catalog_mutator.cpp
     src/core/pinyin.cpp
     src/core/hotkey_parser.cpp
     src/core/placement_math.cpp
     src/core/catalog_sorter.cpp
     src/core/folder_sync.cpp
     src/core/search_engine.cpp
+    src/platform/folder_watcher.cpp
     src/storage/json_codec.cpp
     src/storage/atomic_writer.cpp
     src/storage/backup_manager.cpp
@@ -85,8 +87,13 @@ add_executable(GeekDeskCpp WIN32
     src/platform/shortcut_resolver.cpp
     src/platform/shell_launcher.cpp
     src/platform/single_instance.cpp
+    src/platform/file_dialogs.cpp
     src/ui/icon_cache.cpp
     src/ui/d2d_renderer.cpp
+    src/ui/drag_drop.cpp
+    src/ui/context_menus.cpp
+    src/ui/item_dialogs.cpp
+    src/ui/settings_window.cpp
     src/ui/main_window.cpp
     resources/app.rc
 )
@@ -100,6 +107,7 @@ target_link_libraries(GeekDeskCpp PRIVATE
     shcore
     uxtheme
     gdi32
+    comctl32
 )
 if(MSVC)
     target_compile_options(GeekDeskCpp PRIVATE /W4 /WX /utf-8 /EHsc)

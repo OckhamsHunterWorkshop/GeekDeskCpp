@@ -10,7 +10,7 @@
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | 工程脚手架、纯逻辑内核、Schema v1 存储与备份恢复、单元测试、架构文档 | **已完成** | `src/core/*`, `src/storage/*`, `tests/core_tests.cpp`, `docs/*` |
 | **Phase 2** | Win32 外壳（热键/中键/托盘/DWM/启动）+ Direct2D Software 主面板（可看/可用/能搜索/能启动） | **已完成** | `src/platform/*`, `src/ui/*` |
-| **Phase 3** | 完整交互管理（分组/图标 CRUD、拖拽排序、文件夹监听、原生设置与备份恢复 UI） | 待启动 | `src/ui/settings_window.*`, 联动监听与右键菜单 |
+| **Phase 3** | 完整交互管理（分组/图标 CRUD、拖拽排序、文件夹监听、原生设置与备份恢复 UI） | **已完成** | `catalog_mutator`, `folder_watcher`, `drag_drop`, `context_menus`, `item_dialogs`, `settings_window` |
 | **Phase 4** | 长稳压测（睡眠唤醒/锁屏/多屏热插拔）、内存与启动审计、便携发行打包 | 待启动 | 发布包与完整回归清单 |
 
 ---
@@ -92,16 +92,18 @@ src/ui/
 
 ---
 
-## Phase 3：完整编辑能力、文件夹监听与原生设置/备份界面
+## Phase 3：完整编辑能力、文件夹监听与原生设置/备份界面（已完成基线）
 
-### 3.1 待新增模块
-- `src/platform/folder_watcher.hpp / .cpp`：基于 `ReadDirectoryChangesW` 监听所有 `GroupKind::LinkedFolder` 目录变化，防抖 400ms 后在后台调用 `SyncLinkedFolderGroup`，再刷新主窗口与搜索索引。
-- `src/ui/context_menus.hpp / .cpp`：Win32 `TrackPopupMenuEx` 分组右键菜单（新建分组、新建关联文件夹分组、重命名、图标/排序、删除）、条目右键菜单（以管理员运行、打开所在位置、编辑属性、删除）及内联轻量编辑弹窗。
-- `src/ui/drag_drop.hpp / .cpp`：`IDropTarget` 支持外部从桌面/资源管理器拖入文件/文件夹/`.lnk`/`.url`，以及内部拖拽重排自定义顺序。
-- `src/ui/settings_window.hpp / .cpp`：原生 Direct2D 风格或精简双栏设置面板，覆盖：
-  - 外观（材质 `Acrylic/Mica/MicaAlt/Wallpaper/Gradient`、背景不透明度、卡片遮罩浓度、主题、圆角、图标大小）
-  - 呼出与行为（热键录入框、中键开关、跟随鼠标、全屏屏蔽、隐藏策略、单击/双击、开机自启）
-  - **数据安全与备份恢复中心（核心亮点）**：展示每日快照列表、当前备份保留天数、**一键导出 `.gdbackup`**、**选择 `.gdbackup` 预检条目数 -> 一键恢复（明确提示自动生成 `pre-restore-*` 回滚包并支持立即回滚）**、一键打开日志/数据目录。
+### 3.1 已交付模块
+- `src/core/catalog_mutator.hpp / .cpp`：分组/条目 CRUD、去重校验、`LinkedFolder` 保护、同组重排与跨分组移动。
+- `src/platform/folder_watcher.hpp / .cpp`：基于 `ReadDirectoryChangesW` 重叠 I/O 监听全部 `GroupKind::LinkedFolder` 目录变化，400ms 防抖同步并保留已有条目元数据。
+- `src/platform/file_dialogs.hpp / .cpp`：Windows COM `IFileOpenDialog` / `IFileSaveDialog` 文件、文件夹与保存弹窗，以及 `explorer.exe /select` 定位。
+- `src/ui/context_menus.hpp / .cpp` & `src/ui/item_dialogs.hpp / .cpp`：Win32 `TrackPopupMenuEx` 分组与条目右键菜单、轻量级深浅色文本输入与条目属性编辑弹窗。
+- `src/ui/drag_drop.hpp / .cpp`：`IDropTarget` 支持外部从桌面/资源管理器拖入文件/文件夹/`.lnk`/`.url`（含重入保护与视觉高亮），配合 `MainWindow` 鼠标捕获完成内部图标与分组拖拽重排。
+- `src/ui/settings_window.hpp / .cpp`：3 标签页原生 Win32 设置与备份恢复中心：
+  - 外观（材质 `Acrylic/Mica/MicaAlt/Wallpaper/Gradient`、背景不透明度、卡片遮罩浓度、主题、圆角、图标大小与壁纸选择）
+  - 呼出与行为（热键校验录入、中键开关、光标左上角跟随、全屏屏蔽、隐藏策略、单击/双击、排序与开机自启）
+  - **数据安全与备份恢复中心**：展示统计信息、配置每日保留天数、**一键导出 `.gdbackup`**、**选择 `.gdbackup` 预检条目数 -> 一键恢复（自动生成 `pre-restore-*` 回滚包）**、`.gdbackup` 快照列表直接回滚及目录快捷打开。
 
 ---
 
