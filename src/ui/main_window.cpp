@@ -1775,11 +1775,6 @@ void MainWindow::OnHotKeyTriggered(const char* source) {
             return;
         }
     }
-    if (IsWindowVisible(hwnd_) && GetForegroundWindow() != hwnd_ &&
-        !settings_.window.alwaysTopmost) {
-        ShowAndPosition();
-        return;
-    }
     ToggleWindow();
 }
 
