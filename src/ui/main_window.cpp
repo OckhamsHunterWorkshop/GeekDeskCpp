@@ -790,13 +790,13 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case WM_HOTKEY:
         if (static_cast<int>(wParam) == platform::HotKeyManager::kDefaultHotKeyId) {
-            OnHotKeyTriggered();
+            OnHotKeyTriggered("hotkey");
         }
         return 0;
 
     case kMsgMiddleClick:
         if (settings_.activation.enableMiddleMouse) {
-            OnHotKeyTriggered();
+            OnHotKeyTriggered("middle_mouse");
         }
         return 0;
 
@@ -1761,9 +1761,23 @@ void MainWindow::OnImeComposition(LPARAM lParam) {
     }
 }
 
-void MainWindow::OnHotKeyTriggered() {
-    if (!IsWindowVisible(hwnd_) && settings_.activation.ignoreWhenFullScreen &&
-        platform::IsForegroundFullScreen(hwnd_)) {
+void MainWindow::OnHotKeyTriggered(const char* source) {
+    if (!IsWindowVisible(hwnd_) && settings_.activation.ignoreWhenFullScreen) {
+        std::string reason;
+        if (platform::IsForegroundFullScreen(hwnd_, &reason)) {
+            static std::uint64_t sLastSuppressedLogMs = 0;
+            const std::uint64_t now = GetTickCount64();
+            if (logger_ != nullptr && now - sLastSuppressedLogMs >= 5000) {
+                sLastSuppressedLogMs = now;
+                logger_->Info(std::string("Activation suppressed by fullscreen guard (source=") +
+                              source + ", reason=" + reason + ")");
+            }
+            return;
+        }
+    }
+    if (IsWindowVisible(hwnd_) && GetForegroundWindow() != hwnd_ &&
+        !settings_.window.alwaysTopmost) {
+        ShowAndPosition();
         return;
     }
     ToggleWindow();
@@ -2091,23 +2105,81 @@ void MainWindow::RefreshHooksAndTray() {
     if (!hooksRegistered_ || hwnd_ == nullptr) {
         return;
     }
+    bool hookOk = true;
     if (settings_.activation.enableMiddleMouse) {
-        (void)mouseHook_.Restart();
+        hookOk = mouseHook_.Restart();
+        if (!hookOk && logger_ != nullptr) {
+            logger_->Warn("Middle-mouse WH_MOUSE_LL restart failed (Win32 error " +
+                          std::to_string(GetLastError()) + ")");
+        }
     }
-    if (settings_.activation.enableHotKey && !hotKeyManager_.IsRegistered()) {
+    if (settings_.activation.enableHotKey) {
         std::string err;
         if (hotKeyManager_.Register(hwnd_, settings_.activation.hotKey, err)) {
             hotKeyError_.clear();
         } else {
             hotKeyError_ = err;
+            if (logger_ != nullptr) {
+                logger_->Warn("Hotkey re-register failed on resume/unlock: " + err);
+            }
         }
     }
     if (settings_.state.showTrayIcon) {
         trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp");
     }
     if (logger_ != nullptr) {
-        logger_->Info("System resume/unlock hook & tray refresh completed");
+        logger_->Info(std::string("System resume/unlock hook & tray refresh completed (mouseHook=") +
+                      (hookOk ? "ok" : "failed") + ", hotkey=" +
+                      (hotKeyManager_.IsRegistered() ? "ok" : "inactive") + ")");
     }
+}
+
+std::string MainWindow::BuildDiagnosticsReport() const {
+    HANDLE self = GetCurrentProcess();
+    const std::uint32_t gdi = GetGuiResources(self, GR_GDIOBJECTS);
+    const std::uint32_t user = GetGuiResources(self, GR_USEROBJECTS);
+    DWORD handles = 0;
+    GetProcessHandleCount(self, &handles);
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    GetProcessMemoryInfo(self, reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+
+    std::string fsReason;
+    const bool fsBlocked = platform::IsForegroundFullScreen(hwnd_, &fsReason);
+
+    std::size_t totalItems = 0;
+    for (const auto& grp : catalog_.groups) {
+        totalItems += grp.items.size();
+    }
+
+    std::string out;
+    out += "GeekDeskCpp Diagnostics\n";
+    out += "=======================\n";
+    out += "Data Dir       : " + core::utf8::PathToUtf8(dataRoot_) + "\n";
+    out += "Groups / Items : " + std::to_string(catalog_.groups.size()) + " / " +
+           std::to_string(totalItems) + "\n";
+    out += "HotKey         : " + settings_.activation.hotKey + " (" +
+           std::string(settings_.activation.enableHotKey ? "enabled" : "disabled") + ", " +
+           std::string(hotKeyManager_.IsRegistered() ? "registered" : "not registered") + ")\n";
+    if (!hotKeyError_.empty()) {
+        out += "HotKey Error   : " + hotKeyError_ + "\n";
+    }
+    out += "Middle Mouse   : " +
+           std::string(settings_.activation.enableMiddleMouse ? "enabled" : "disabled") + ", " +
+           std::string(mouseHook_.IsRunning() ? "hook active" : "hook inactive") + "\n";
+    out += "FullscreenGuard: " +
+           std::string(settings_.activation.ignoreWhenFullScreen ? "enabled" : "disabled") +
+           " (now=" + std::string(fsBlocked ? ("blocked: " + fsReason) : "clear") + ")\n";
+    auto fmtMb = [](SIZE_T bytes) {
+        char buf[32]{};
+        std::snprintf(buf, sizeof(buf), "%.2f MB", static_cast<double>(bytes) / (1024.0 * 1024.0));
+        return std::string(buf);
+    };
+    out += "Working Set    : " + fmtMb(pmc.WorkingSetSize) + "\n";
+    out += "Private Bytes  : " + fmtMb(pmc.PrivateUsage) + "\n";
+    out += "GDI/USER/Hnd   : " + std::to_string(gdi) + " / " + std::to_string(user) + " / " +
+           std::to_string(handles) + "\n";
+    return out;
 }
 
 float MainWindow::PxToDip(int px) const noexcept {
@@ -2224,6 +2296,7 @@ void MainWindow::OpenSettingsWindow() {
         }
         return {catalog_.groups.size(), totalItems};
     };
+    cb.onQueryDiagnostics = [this]() { return BuildDiagnosticsReport(); };
     cb.onClosed = [this]() {
         if (hwnd_ != nullptr && IsWindowVisible(hwnd_)) {
             SetForegroundWindow(hwnd_);

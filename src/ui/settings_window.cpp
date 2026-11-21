@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 namespace geekdesk::ui {
@@ -577,6 +578,34 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
             case kIdOpenLogsDirBtn:
                 (void)platform::OpenDirectoryInExplorer(dataRoot_ / L"logs");
                 break;
+            case kIdDiagnosticsBtn:
+                if (callbacks_.onQueryDiagnostics) {
+                    const std::string report = callbacks_.onQueryDiagnostics();
+                    const std::wstring wReport = core::utf8::Utf8ToWide(report);
+                    if (OpenClipboard(hwnd_)) {
+                        EmptyClipboard();
+                        const std::size_t bytes = (wReport.size() + 1) * sizeof(wchar_t);
+                        if (HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, bytes); hMem != nullptr) {
+                            if (void* ptr = GlobalLock(hMem); ptr != nullptr) {
+                                std::memcpy(ptr, wReport.c_str(), bytes);
+                                GlobalUnlock(hMem);
+                                SetClipboardData(CF_UNICODETEXT, hMem);
+                            } else {
+                                GlobalFree(hMem);
+                            }
+                        }
+                        CloseClipboard();
+                    }
+                    const bool en = core::IsEnglishUi(working_.appearance.language);
+                    const std::wstring fullMsg =
+                        wReport +
+                        (en ? L"\n(Diagnostics copied to clipboard)"
+                            : L"\n\n\uFF08\u8BCA\u65AD\u62A5\u544A\u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F\uFF09");
+                    MessageBoxW(hwnd_, fullMsg.c_str(),
+                                en ? L"GeekDeskCpp Diagnostics" : L"GeekDeskCpp \u8FD0\u884C\u72B6\u6001\u8BCA\u65AD",
+                                MB_OK | MB_ICONINFORMATION);
+                }
+                break;
             }
             return 0;
         }
@@ -1034,6 +1063,14 @@ void SettingsWindow::BuildControls() {
                     WS_CHILD | WS_TABSTOP, px + (thirdW + ScalePx(8, dpi_)) * 2, y2, thirdW,
                     ScalePx(28, dpi_), hwnd_,
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdOpenLogsDirBtn)), hInst,
+                    nullptr));
+    y2 += ScalePx(36, dpi_);
+    addToTab(2, CreateWindowExW(
+                    0, L"BUTTON",
+                    en ? L"Run Status Diagnostics & Copy Report"
+                       : L"\u8FD0\u884C\u72B6\u6001\u8BCA\u65AD\u5E76\u590D\u5236\u62A5\u544A",
+                    WS_CHILD | WS_TABSTOP, px, y2, pw, ScalePx(28, dpi_), hwnd_,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDiagnosticsBtn)), hInst,
                     nullptr));
 
     // Bottom Close button

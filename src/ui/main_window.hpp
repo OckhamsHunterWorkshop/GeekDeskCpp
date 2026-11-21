@@ -101,7 +101,7 @@ private:
     void OnChar(wchar_t ch);
     void OnImeStartComposition();
     void OnImeComposition(LPARAM lParam);
-    void OnHotKeyTriggered();
+    void OnHotKeyTriggered(const char* source);
     void OnTrayIconEvent(LPARAM lParam);
     void OnFolderChangedNotifications();
 
@@ -126,6 +126,7 @@ private:
     void ScheduleSaveCatalog();
     void ResetDefaultStatus();
     void RefreshHooksAndTray();
+    [[nodiscard]] std::string BuildDiagnosticsReport() const;
     void UpdateHeaderTooltip(HeaderButton btn);
     bool FindCatalogIndices(const core::LaunchItem* ptr,
                             std::size_t& outGroupIdx,

@@ -17,6 +17,7 @@ struct SettingsCallbacks {
     std::function<void(const core::AppSettings&, const core::CatalogDocument&, const std::filesystem::path&)>
         onBackupRestored;
     std::function<std::pair<std::size_t, std::size_t>()> onQueryStats;
+    std::function<std::string()> onQueryDiagnostics;
     std::function<void()> onClosed;
 };
 
@@ -112,6 +113,7 @@ private:
         kIdOpenDataDirBtn,
         kIdOpenBackupsDirBtn,
         kIdOpenLogsDirBtn,
+        kIdDiagnosticsBtn,
     };
 
     HWND hwnd_ = nullptr;
