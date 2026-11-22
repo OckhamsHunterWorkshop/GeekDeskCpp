@@ -10,6 +10,8 @@
 > **设计哲学：做减法，少即是多。**  
 > 砍掉动辄 110~330 MB 内存的 .NET/WPF 运行时、砍掉臃肿的 Everything 全盘检索与过时迁移包袱，只保留启动器最核心的 **毫秒级呼出、离线拼音直达、文件夹联动、Win10/Win11 统一分层视效与可靠的数据备份恢复**。
 
+<img width="824" height="620" alt="image" src="https://github.com/user-attachments/assets/a0e8f4d1-fd9d-45e9-97d6-7c7f73e265bf" />
+
 ---
 
 ## 核心特性 / Highlights
@@ -35,7 +37,7 @@
 | 外部依赖审计（`objdump -p`） | 仅依赖 Windows 系统 DLL；**无** MinGW 运行时 DLL、**无** GPU 硬件用户态驱动、**无** `Everything*.dll` |
 | 冷启动 + 首帧渲染（`--smoke-ui`） | **~92 ms**，Private Bytes **~11–12 MB**（Working Set ~25 MB） |
 | 真实目录加载建索引（9 分组 / 78 条目） | **~15 ms** |
-| 200 轮高强度压测（`--soak-test 200`） | GDI `63 -> 69`、USER `47 -> 48`、Handles `348 -> 348`、Private Bytes `15.59 MB -> 17.54 MB`（零泄漏） |
+| 200 轮高强度压测（`--soak-test 200`） | GDI `62 -> 69`、USER `48 -> 49`、Handles `348 -> 348`、Private Bytes `15.41 MB -> 17.41 MB`（零泄漏） |
 | 日常驻留使用（78 条目 + 图标缓存） | 私有内存约 **22–24 MB**，空闲 CPU **0%**，显存 **0 MB** |
 
 ---
@@ -73,19 +75,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps
 
 ---
 
-## 文档导航
-
-| 文档 | 内容说明 |
-| :--- | :--- |
-| [`AGENTS.md`](./AGENTS.md) | 仓库架构红线、目录职责与验证规范 |
-| [`docs/01-prd-and-scope.md`](./docs/01-prd-and-scope.md) | 产品背景、范围边界与资源预算 |
-| [`docs/02-architecture-and-design.md`](./docs/02-architecture-and-design.md) | 4 层架构、线程模型、Mode A 渲染管线与内存控制策略 |
-| [`docs/03-implementation-plan.md`](./docs/03-implementation-plan.md) | Phase 1~4 实施计划与 Win32/D2D 关键经验 |
-| [`docs/04-data-and-backup-spec.md`](./docs/04-data-and-backup-spec.md) | JSON Schema v1 字段契约、原子写、自动恢复与 `.gdbackup` 备份规范 |
-
----
-
 ## 致敬 / Acknowledgements
-
 本项目的设计灵感致敬开源项目 [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk)（基于 C++20 + Win32 + Direct2D 从零重写，聚焦极简与低内存占用）。
-
