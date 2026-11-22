@@ -45,6 +45,12 @@ enum class HeaderButton : int {
     Hide = 3,
 };
 
+enum class SidebarButton : int {
+    None = -1,
+    NewGroup = 0,
+    LinkFolder = 1,
+};
+
 struct DisplayedItemView {
     const core::LaunchItem* item = nullptr;
     std::string groupName;
@@ -59,6 +65,7 @@ struct LayoutSnapshot {
     std::array<RectDip, 4> headerButtonRects{};
     RectDip sidebarRect;
     std::vector<RectDip> groupRects;
+    std::array<RectDip, 2> sidebarButtonRects{};
     RectDip contentCardRect;
     RectDip gridViewportRect;
     RectDip scrollbarTrackRect;
@@ -98,6 +105,7 @@ struct RenderState {
     int draggingGroupIdx = -1;
     int dragTargetGroupIdx = -1;
     HeaderButton hoveredHeaderButton = HeaderButton::None;
+    SidebarButton hoveredSidebarButton = SidebarButton::None;
     bool alwaysTopmost = false;
     std::string statusText;
     std::filesystem::path dataRoot;
@@ -169,6 +177,7 @@ private:
     platform::ComPtr<IDWriteTextFormat> badgeFmt_;
     platform::ComPtr<IDWriteTextFormat> statusFmt_;
     platform::ComPtr<IDWriteTextFormat> emptyFmt_;
+    platform::ComPtr<IDWriteTextFormat> sidebarBtnFmt_;
 
     HDC memDc_ = nullptr;
     HBITMAP memBitmap_ = nullptr;

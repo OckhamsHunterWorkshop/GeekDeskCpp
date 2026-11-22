@@ -926,6 +926,7 @@ bool MainWindow::PresentLayeredFrame() {
     state.draggingGroupIdx = (dragActive_ && dragCandidate_ == DragKind::Group) ? dragStartIndex_ : -1;
     state.dragTargetGroupIdx = dragActive_ ? dragTargetGroupIdx_ : -1;
     state.hoveredHeaderButton = hoveredHeaderBtn_;
+    state.hoveredSidebarButton = hoveredSidebarBtn_;
     state.alwaysTopmost = settings_.window.alwaysTopmost;
     state.statusText = statusText_;
     state.dataRoot = dataRoot_;
@@ -1020,6 +1021,7 @@ void MainWindow::OnMouseMove(int xPx, int yPx) {
     const int newGroup = HitTestGroup(xDip, yDip);
     const int newTile = HitTestTile(xDip, yDip);
     const HeaderButton newBtn = HitTestHeaderButton(xDip, yDip);
+    const SidebarButton newSideBtn = HitTestSidebarButton(xDip, yDip);
     const bool groupChanged = (newGroup != hoveredGroupIdx_);
 
     if (groupChanged) {
@@ -1031,13 +1033,14 @@ void MainWindow::OnMouseMove(int xPx, int yPx) {
         }
     }
 
-    const bool btnChanged = (newBtn != hoveredHeaderBtn_);
+    const bool btnChanged = (newBtn != hoveredHeaderBtn_ || newSideBtn != hoveredSidebarBtn_);
     const bool changed = (groupChanged || newTile != hoveredTileIdx_ || btnChanged);
     hoveredTileIdx_ = newTile;
     hoveredHeaderBtn_ = newBtn;
+    hoveredSidebarBtn_ = newSideBtn;
 
     if (btnChanged) {
-        UpdateHeaderTooltip(newBtn);
+        UpdateHeaderTooltip(newBtn, newSideBtn);
     }
     if (changed) {
         RequestRender();
@@ -1048,11 +1051,13 @@ void MainWindow::OnMouseLeave() {
     trackingMouseLeave_ = false;
     KillTimer(hwnd_, kTimerHoverGroup);
     if (hoveredGroupIdx_ != -1 || hoveredTileIdx_ != -1 ||
-        hoveredHeaderBtn_ != HeaderButton::None) {
+        hoveredHeaderBtn_ != HeaderButton::None ||
+        hoveredSidebarBtn_ != SidebarButton::None) {
         hoveredGroupIdx_ = -1;
         hoveredTileIdx_ = -1;
         hoveredHeaderBtn_ = HeaderButton::None;
-        UpdateHeaderTooltip(HeaderButton::None);
+        hoveredSidebarBtn_ = SidebarButton::None;
+        UpdateHeaderTooltip(HeaderButton::None, SidebarButton::None);
         RequestRender();
     }
 }
@@ -1075,7 +1080,7 @@ void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
             SetWindowPos(hwnd_, settings_.window.alwaysTopmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0,
                          0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             ScheduleSaveSettings();
-            UpdateHeaderTooltip(btn);
+            UpdateHeaderTooltip(btn, SidebarButton::None);
             RequestRender();
         } else if (btn == HeaderButton::Refresh) {
             SyncAllLinkedFolders(true);
@@ -1083,6 +1088,19 @@ void MainWindow::OnLeftButtonDown(int xPx, int yPx) {
             OpenSettingsWindow();
         } else if (btn == HeaderButton::Hide) {
             HideWindow();
+        }
+        return;
+    }
+
+    if (const SidebarButton sbtn = HitTestSidebarButton(xDip, yDip);
+        sbtn != SidebarButton::None) {
+        searchFocused_ = false;
+        KillTimer(hwnd_, kTimerCaret);
+        ModalGuard guard(modalDepth_);
+        if (sbtn == SidebarButton::NewGroup) {
+            CreateManualGroupInteractive();
+        } else {
+            CreateLinkedFolderGroupInteractive();
         }
         return;
     }
@@ -1225,72 +1243,19 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
         ModalGuard guard(modalDepth_);
         const bool en = core::IsEnglishUi(settings_.appearance.language);
         const auto action = ShowGroupContextMenu(
-            hwnd_, screenPt, clickedGroup, isLinked,
+            hwnd_, screenPt, palette_.isDark, clickedGroup, isLinked,
             clickedGroup ? static_cast<std::size_t>(gIdx) : 0u, catalog_.groups.size(), en);
         if (!action.has_value()) {
             return;
         }
 
         switch (*action) {
-        case GroupMenuAction::NewManualGroup: {
-            if (auto name = ShowTextInputDialog(
-                    hwnd_, palette_.isDark, en ? L"New Group" : L"\u65B0\u5EFA\u666E\u901A\u5206\u7EC4",
-                    en ? L"Group name:" : L"\u8BF7\u8F93\u5165\u5206\u7EC4\u540D\u79F0:", "", en);
-                name.has_value()) {
-                const std::size_t idx = core::AddManualGroup(catalog_, *name);
-                if (settings_.behavior.groupSort != core::SortOrder::Custom) {
-                    const std::string newId = catalog_.groups[idx].id;
-                    core::SortGroups(catalog_.groups, settings_.behavior.groupSort);
-                    for (std::size_t i = 0; i < catalog_.groups.size(); ++i) {
-                        if (catalog_.groups[i].id == newId) {
-                            activeGroupIndex_ = i;
-                            break;
-                        }
-                    }
-                } else {
-                    activeGroupIndex_ = idx;
-                }
-                settings_.state.lastSelectedGroupId = catalog_.groups[activeGroupIndex_].id;
-                searchEngine_.Rebuild(catalog_);
-                RebuildDisplayedItems();
-                ScheduleSaveSettings();
-                ScheduleSaveCatalog();
-                RequestRender();
-            }
+        case GroupMenuAction::NewManualGroup:
+            CreateManualGroupInteractive();
             break;
-        }
-        case GroupMenuAction::NewLinkedFolderGroup: {
-            if (auto folder = platform::PickFolderDialog(
-                    hwnd_, en ? L"Choose Folder to Link" : L"\u9009\u62E9\u8981\u5173\u8054\u7684\u6587\u4EF6\u5939");
-                folder.has_value()) {
-                const std::string defName = core::utf8::PathToUtf8(folder->filename());
-                if (auto name = ShowTextInputDialog(
-                        hwnd_, palette_.isDark,
-                        en ? L"New Linked Folder Group" : L"\u65B0\u5EFA\u5173\u8054\u6587\u4EF6\u5939\u5206\u7EC4",
-                        en ? L"Group name:" : L"\u5206\u7EC4\u540D\u79F0:", defName, en);
-                    name.has_value()) {
-                    const std::size_t idx = core::AddLinkedFolderGroup(
-                        catalog_, *name, core::utf8::PathToUtf8(*folder));
-                    const std::string newId = catalog_.groups[idx].id;
-                    core::SortItems(catalog_.groups[idx].items, settings_.behavior.itemSort);
-                    core::SortGroups(catalog_.groups, settings_.behavior.groupSort);
-                    for (std::size_t i = 0; i < catalog_.groups.size(); ++i) {
-                        if (catalog_.groups[i].id == newId) {
-                            activeGroupIndex_ = i;
-                            break;
-                        }
-                    }
-                    RestartFolderWatchers();
-                    settings_.state.lastSelectedGroupId = catalog_.groups[activeGroupIndex_].id;
-                    searchEngine_.Rebuild(catalog_);
-                    RebuildDisplayedItems();
-                    ScheduleSaveSettings();
-                    ScheduleSaveCatalog();
-                    RequestRender();
-                }
-            }
+        case GroupMenuAction::NewLinkedFolderGroup:
+            CreateLinkedFolderGroupInteractive();
             break;
-        }
         case GroupMenuAction::RenameGroup:
             if (clickedGroup) {
                 const auto idx = static_cast<std::size_t>(gIdx);
@@ -1403,7 +1368,7 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
         ModalGuard guard(modalDepth_);
         const bool en = core::IsEnglishUi(settings_.appearance.language);
         const auto action = ShowItemContextMenu(
-            hwnd_, screenPt, clickedItem && foundIndices, isManual, curAdmin,
+            hwnd_, screenPt, palette_.isDark, clickedItem && foundIndices, isManual, curAdmin,
             settings_.behavior.itemSort, en);
         if (!action.has_value()) {
             return;
@@ -1785,7 +1750,31 @@ void MainWindow::OnTrayIconEvent(LPARAM lParam) {
     } else if (mouseMsg == WM_RBUTTONUP || mouseMsg == WM_CONTEXTMENU) {
         inTrayMenu_ = true;
         const bool en = core::IsEnglishUi(settings_.appearance.language);
-        const auto cmd = trayIcon_.ShowContextMenu(hwnd_, platform::IsAutoStartEnabled(), en);
+        const bool autoStart = platform::IsAutoStartEnabled();
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        const std::vector<PopupMenuItem> trayItems = {
+            {static_cast<UINT>(platform::TrayCommand::ToggleWindow),
+             en ? L"Show / Hide Launcher" : L"\u663E\u793A / \u9690\u85CF\u4E3B\u9762\u677F"},
+            {static_cast<UINT>(platform::TrayCommand::OpenSettings),
+             en ? L"Settings & Backup..." : L"\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u6062\u590D..."},
+            {static_cast<UINT>(platform::TrayCommand::SyncCatalog),
+             en ? L"Sync Linked Folders" : L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939"},
+            {static_cast<UINT>(platform::TrayCommand::OpenDataDir),
+             en ? L"Open Data Folder" : L"\u6253\u5F00\u6570\u636E\u76EE\u5F55"},
+            {0, L"", true, false, false},
+            {static_cast<UINT>(platform::TrayCommand::ToggleAutoStart),
+             en ? L"Run at Startup" : L"\u5F00\u673A\u81EA\u52A8\u542F\u52A8", false, true,
+             autoStart},
+            {0, L"", true, false, false},
+            {static_cast<UINT>(platform::TrayCommand::Exit),
+             en ? L"Exit GeekDeskCpp" : L"\u9000\u51FA GeekDeskCpp"},
+        };
+        const auto picked = ShowThemedPopupMenu(hwnd_, cursor, palette_.isDark, trayItems);
+        const std::optional<platform::TrayCommand> cmd =
+            picked.has_value() ? std::optional<platform::TrayCommand>(
+                                     static_cast<platform::TrayCommand>(*picked))
+                               : std::nullopt;
         inTrayMenu_ = false;
         if (!cmd.has_value()) {
             return;
@@ -1830,37 +1819,44 @@ void MainWindow::ApplyBackdropAndPalette() {
     }
 }
 
-void MainWindow::UpdateHeaderTooltip(HeaderButton btn) {
+void MainWindow::UpdateHeaderTooltip(HeaderButton btn, SidebarButton sbtn) {
     if (headerTooltip_ == nullptr || hwnd_ == nullptr) {
         return;
     }
     const bool en = core::IsEnglishUi(settings_.appearance.language);
     const wchar_t* text = L"";
-    switch (btn) {
-    case HeaderButton::Pin:
-        if (settings_.window.alwaysTopmost) {
-            text = en ? L"Unpin window (currently pinned on top)"
-                      : L"\u53D6\u6D88\u7F6E\u9876\uFF08\u5F53\u524D\u5DF2\u56FA\u5B9A\u5728\u6700\u524D\uFF09";
-        } else {
-            text = en ? L"Pin window on top"
-                      : L"\u7F6E\u9876\u7A97\u53E3\uFF08\u4FDD\u6301\u5728\u6700\u524D\uFF09";
+    if (btn != HeaderButton::None) {
+        switch (btn) {
+        case HeaderButton::Pin:
+            if (settings_.window.alwaysTopmost) {
+                text = en ? L"Unpin window (currently pinned on top)"
+                          : L"\u53D6\u6D88\u7F6E\u9876\uFF08\u5F53\u524D\u5DF2\u56FA\u5B9A\u5728\u6700\u524D\uFF09";
+            } else {
+                text = en ? L"Pin window on top"
+                          : L"\u7F6E\u9876\u7A97\u53E3\uFF08\u4FDD\u6301\u5728\u6700\u524D\uFF09";
+            }
+            break;
+        case HeaderButton::Refresh:
+            text = en ? L"Refresh & sync linked folders"
+                      : L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939";
+            break;
+        case HeaderButton::Settings:
+            text = en ? L"Open Settings & Backup"
+                      : L"\u6253\u5F00\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u4E2D\u5FC3";
+            break;
+        case HeaderButton::Hide:
+            text = en ? L"Hide to tray (Esc)"
+                      : L"\u9690\u85CF\u5230\u7CFB\u7EDF\u6258\u76D8 (Esc)";
+            break;
+        case HeaderButton::None:
+            text = L"";
+            break;
         }
-        break;
-    case HeaderButton::Refresh:
-        text = en ? L"Refresh & sync linked folders"
-                  : L"\u5237\u65B0\u5E76\u540C\u6B65\u5173\u8054\u6587\u4EF6\u5939";
-        break;
-    case HeaderButton::Settings:
-        text = en ? L"Open Settings & Backup"
-                  : L"\u6253\u5F00\u8BBE\u7F6E\u4E0E\u5907\u4EFD\u4E2D\u5FC3";
-        break;
-    case HeaderButton::Hide:
-        text = en ? L"Hide to tray (Esc)"
-                  : L"\u9690\u85CF\u5230\u7CFB\u7EDF\u6258\u76D8 (Esc)";
-        break;
-    case HeaderButton::None:
-        text = L"";
-        break;
+    } else if (sbtn == SidebarButton::NewGroup) {
+        text = en ? L"Create a new custom group" : L"\u65B0\u5EFA\u666E\u901A\u5206\u7EC4";
+    } else if (sbtn == SidebarButton::LinkFolder) {
+        text = en ? L"Link a local folder as a dynamic group"
+                  : L"\u65B0\u5EFA\u5173\u8054\u6587\u4EF6\u5939\u5206\u7EC4";
     }
 
     SendMessageW(headerTooltip_, TTM_POP, 0, 0);
@@ -2210,6 +2206,76 @@ HeaderButton MainWindow::HitTestHeaderButton(float xDip, float yDip) const noexc
         }
     }
     return HeaderButton::None;
+}
+
+SidebarButton MainWindow::HitTestSidebarButton(float xDip, float yDip) const noexcept {
+    for (int i = 0; i < 2; ++i) {
+        if (layout_.sidebarButtonRects[static_cast<std::size_t>(i)].Contains(xDip, yDip)) {
+            return static_cast<SidebarButton>(i);
+        }
+    }
+    return SidebarButton::None;
+}
+
+void MainWindow::CreateManualGroupInteractive() {
+    const bool en = core::IsEnglishUi(settings_.appearance.language);
+    if (auto name = ShowTextInputDialog(
+            hwnd_, palette_.isDark, en ? L"New Group" : L"\u65B0\u5EFA\u666E\u901A\u5206\u7EC4",
+            en ? L"Group name:" : L"\u8BF7\u8F93\u5165\u5206\u7EC4\u540D\u79F0:", "", en);
+        name.has_value()) {
+        const std::size_t idx = core::AddManualGroup(catalog_, *name);
+        if (settings_.behavior.groupSort != core::SortOrder::Custom) {
+            const std::string newId = catalog_.groups[idx].id;
+            core::SortGroups(catalog_.groups, settings_.behavior.groupSort);
+            for (std::size_t i = 0; i < catalog_.groups.size(); ++i) {
+                if (catalog_.groups[i].id == newId) {
+                    activeGroupIndex_ = i;
+                    break;
+                }
+            }
+        } else {
+            activeGroupIndex_ = idx;
+        }
+        settings_.state.lastSelectedGroupId = catalog_.groups[activeGroupIndex_].id;
+        searchEngine_.Rebuild(catalog_);
+        RebuildDisplayedItems();
+        ScheduleSaveSettings();
+        ScheduleSaveCatalog();
+        RequestRender();
+    }
+}
+
+void MainWindow::CreateLinkedFolderGroupInteractive() {
+    const bool en = core::IsEnglishUi(settings_.appearance.language);
+    if (auto folder = platform::PickFolderDialog(
+            hwnd_, en ? L"Choose Folder to Link" : L"\u9009\u62E9\u8981\u5173\u8054\u7684\u6587\u4EF6\u5939");
+        folder.has_value()) {
+        const std::string defName = core::utf8::PathToUtf8(folder->filename());
+        if (auto name = ShowTextInputDialog(
+                hwnd_, palette_.isDark,
+                en ? L"New Linked Folder Group" : L"\u65B0\u5EFA\u5173\u8054\u6587\u4EF6\u5939\u5206\u7EC4",
+                en ? L"Group name:" : L"\u5206\u7EC4\u540D\u79F0:", defName, en);
+            name.has_value()) {
+            const std::size_t idx =
+                core::AddLinkedFolderGroup(catalog_, *name, core::utf8::PathToUtf8(*folder));
+            const std::string newId = catalog_.groups[idx].id;
+            core::SortItems(catalog_.groups[idx].items, settings_.behavior.itemSort);
+            core::SortGroups(catalog_.groups, settings_.behavior.groupSort);
+            for (std::size_t i = 0; i < catalog_.groups.size(); ++i) {
+                if (catalog_.groups[i].id == newId) {
+                    activeGroupIndex_ = i;
+                    break;
+                }
+            }
+            RestartFolderWatchers();
+            settings_.state.lastSelectedGroupId = catalog_.groups[activeGroupIndex_].id;
+            searchEngine_.Rebuild(catalog_);
+            RebuildDisplayedItems();
+            ScheduleSaveSettings();
+            ScheduleSaveCatalog();
+            RequestRender();
+        }
+    }
 }
 
 void MainWindow::OnFolderChangedNotifications() {

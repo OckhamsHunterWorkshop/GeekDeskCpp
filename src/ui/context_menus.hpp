@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace geekdesk::ui {
 
@@ -34,8 +36,23 @@ enum class ItemMenuAction : UINT {
     SortNameAsc = 3022,
 };
 
+struct PopupMenuItem {
+    UINT id = 0;
+    std::wstring label;
+    bool separator = false;
+    bool enabled = true;
+    bool checked = false;
+};
+
+/// Show a unified Direct2D Software layered rounded popup menu matching the main window theme.
+[[nodiscard]] std::optional<UINT> ShowThemedPopupMenu(HWND owner,
+                                                      POINT screenPt,
+                                                      bool isDark,
+                                                      const std::vector<PopupMenuItem>& items);
+
 [[nodiscard]] std::optional<GroupMenuAction> ShowGroupContextMenu(HWND owner,
                                                                   POINT screenPt,
+                                                                  bool isDark,
                                                                   bool clickedOnGroup,
                                                                   bool isLinkedFolder,
                                                                   std::size_t groupIndex,
@@ -44,6 +61,7 @@ enum class ItemMenuAction : UINT {
 
 [[nodiscard]] std::optional<ItemMenuAction> ShowItemContextMenu(HWND owner,
                                                                 POINT screenPt,
+                                                                bool isDark,
                                                                 bool clickedOnItem,
                                                                 bool isManualGroup,
                                                                 bool runAsAdmin,

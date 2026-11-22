@@ -113,6 +113,8 @@ private:
     void SyncAllLinkedFolders(bool showFeedback);
     void RestartFolderWatchers();
     void OpenSettingsWindow();
+    void CreateManualGroupInteractive();
+    void CreateLinkedFolderGroupInteractive();
     void ApplySettingsLive(const core::AppSettings& next);
     void ApplyBackupRestored(const core::AppSettings& nextSettings,
                              const core::CatalogDocument& nextCatalog,
@@ -127,7 +129,7 @@ private:
     void ResetDefaultStatus();
     void RefreshHooksAndTray();
     [[nodiscard]] std::string BuildDiagnosticsReport() const;
-    void UpdateHeaderTooltip(HeaderButton btn);
+    void UpdateHeaderTooltip(HeaderButton btn, SidebarButton sbtn = SidebarButton::None);
     bool FindCatalogIndices(const core::LaunchItem* ptr,
                             std::size_t& outGroupIdx,
                             std::size_t& outItemIdx) const noexcept;
@@ -136,6 +138,7 @@ private:
     [[nodiscard]] int HitTestGroup(float xDip, float yDip) const noexcept;
     [[nodiscard]] int HitTestTile(float xDip, float yDip) const noexcept;
     [[nodiscard]] HeaderButton HitTestHeaderButton(float xDip, float yDip) const noexcept;
+    [[nodiscard]] SidebarButton HitTestSidebarButton(float xDip, float yDip) const noexcept;
 
     std::filesystem::path dataRoot_;
     core::AppSettings settings_;
@@ -196,6 +199,7 @@ private:
     int dragTargetTileIdx_ = -1;
     int dragTargetGroupIdx_ = -1;
     HeaderButton hoveredHeaderBtn_ = HeaderButton::None;
+    SidebarButton hoveredSidebarBtn_ = SidebarButton::None;
 
     std::string hotKeyError_;
     std::string statusText_;

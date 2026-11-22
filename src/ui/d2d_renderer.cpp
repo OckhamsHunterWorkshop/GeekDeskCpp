@@ -200,6 +200,7 @@ void D2DRenderer::Shutdown() {
     DiscardTargetAndBitmaps();
     ReleaseBackBuffer();
     emptyFmt_.Reset();
+    sidebarBtnFmt_.Reset();
     statusFmt_.Reset();
     badgeFmt_.Reset();
     itemTitleFmt_.Reset();
@@ -287,7 +288,9 @@ bool D2DRenderer::EnsureTextFormats(std::string_view fontFamily, int fontSize) {
         makeFmt(statusFmt_, std::max(10.0f, base - 1.0f), DWRITE_FONT_WEIGHT_NORMAL,
                 DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
         makeFmt(emptyFmt_, base + 2.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, true, false);
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, true, false) &&
+        makeFmt(sidebarBtnFmt_, std::max(10.0f, base - 0.5f), DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true);
     if (ok) {
         cachedFontFamily_ = family;
         cachedFontSize_ = clampedSize;
@@ -454,10 +457,11 @@ LayoutSnapshot D2DRenderer::ComputeLayout(const core::AppSettings& settings,
 
     snap.sidebarRect = {kOuterPad, bodyTop, kOuterPad + sidebarW, bodyBottom};
     const float groupPad = 6.0f;
+    const float footerH = 40.0f;
     float gy = snap.sidebarRect.top + groupPad;
     snap.groupRects.reserve(groupCount);
     for (std::size_t i = 0; i < groupCount; ++i) {
-        if (gy + kGroupRowH > snap.sidebarRect.bottom - 4.0f) {
+        if (gy + kGroupRowH > snap.sidebarRect.bottom - footerH) {
             snap.groupRects.push_back(RectDip{0, 0, 0, 0});
         } else {
             snap.groupRects.push_back(
@@ -466,6 +470,17 @@ LayoutSnapshot D2DRenderer::ComputeLayout(const core::AppSettings& settings,
         }
         gy += kGroupRowH + kGroupGap;
     }
+
+    const float footerBtnY = snap.sidebarRect.bottom - 34.0f;
+    const float footerBtnH = 26.0f;
+    const float footerLeft = snap.sidebarRect.left + groupPad;
+    const float footerRight = snap.sidebarRect.right - groupPad;
+    const float footerGap = 6.0f;
+    const float footerBtnW = std::max(36.0f, (footerRight - footerLeft - footerGap) * 0.5f);
+    snap.sidebarButtonRects[0] = {footerLeft, footerBtnY, footerLeft + footerBtnW,
+                                  footerBtnY + footerBtnH};
+    snap.sidebarButtonRects[1] = {footerLeft + footerBtnW + footerGap, footerBtnY, footerRight,
+                                  footerBtnY + footerBtnH};
 
     snap.contentCardRect = {snap.sidebarRect.right + kBodyGap, bodyTop, snap.widthDip - kOuterPad,
                             bodyBottom};
@@ -1038,6 +1053,33 @@ bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
         solidBrush_->SetColor(ToD2D(pal.textSecondary));
         dcTarget_->DrawTextW(wCount.data(), static_cast<UINT32>(wCount.size()), countFmt_.Get(),
                              ToRect(countRect), solidBrush_.Get());
+    }
+
+    // Sidebar bottom action buttons: + Group & Link Folder
+    solidBrush_->SetColor(ToD2D(pal.divider));
+    const float footerDivY = outLayout.sidebarRect.bottom - 40.0f;
+    dcTarget_->DrawLine(D2D1_POINT_2F{outLayout.sidebarRect.left + 8.0f, footerDivY},
+                        D2D1_POINT_2F{outLayout.sidebarRect.right - 8.0f, footerDivY},
+                        solidBrush_.Get(), 1.0f);
+
+    const wchar_t* footerLabels[2] = {
+        enUi ? L"+ Group" : L"+ \u5206\u7EC4",
+        enUi ? L"Link" : L"\u5173\u8054",
+    };
+    for (int bi = 0; bi < 2; ++bi) {
+        const auto sbtn = static_cast<SidebarButton>(bi);
+        const RectDip& br = outLayout.sidebarButtonRects[static_cast<std::size_t>(bi)];
+        const bool hovered = (sbtn == state.hoveredSidebarButton);
+        solidBrush_->SetColor(
+            ToD2D(hovered ? pal.headerButtonHoverBg : pal.headerButtonBg));
+        dcTarget_->FillRoundedRectangle(ToRounded(br, 6.0f, 6.0f), solidBrush_.Get());
+        solidBrush_->SetColor(ToD2D(hovered ? pal.accent : pal.divider));
+        dcTarget_->DrawRoundedRectangle(ToRounded(br, 6.0f, 6.0f), solidBrush_.Get(), 1.0f);
+
+        solidBrush_->SetColor(ToD2D(pal.textPrimary));
+        const std::wstring_view lbl(footerLabels[bi]);
+        dcTarget_->DrawTextW(lbl.data(), static_cast<UINT32>(lbl.size()), sidebarBtnFmt_.Get(),
+                             ToRect(br), solidBrush_.Get());
     }
 
     // 4. Right Content Card & Item Grid
