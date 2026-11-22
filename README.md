@@ -1,5 +1,9 @@
 # GeekDeskCpp
 
+> 🏛️ **[Ockham's Hunter Workshop · 奥卡姆的猎人工坊](https://github.com/OckhamsHunterWorkshop)** 出品  
+> *"Fear the creeping bloat. Entia non sunt multiplicanda praeter necessitatem."*  
+> 「 警惕蔓延的臃肿 —— 如无必要，勿增实体。」
+
 **极简、原生、极致效率的 Windows 10/11 桌面快速启动器（C++20 + Win32 + Direct2D Software）。**  
 *A minimal, ultra-fast native Windows 10/11 desktop launcher built with C++20, Win32, and Direct2D Software.*
 
@@ -10,12 +14,16 @@
 
 ## 核心特性 / Highlights
 
-- **原生零依赖单文件**：MinGW C++20 静态链接，单文件约 **2.65 MB**（ZIP 约 **1.14 MB**）；无 `.NET`、无 `WebView2`、无 `Everything64.dll`、**0 MB 显存占用**（不加载 D3D11/DXGI GPU 用户态驱动）。
+- **原生零依赖单文件**：MinGW C++20 静态链接，单文件约 **2.72 MB**（ZIP 约 **1.17 MB**）；无 `.NET`、无 `WebView2`、无 `Everything64.dll`、**0 MB 显存占用**（不加载 D3D11/DXGI GPU 用户态驱动）。
 - **Win10 / Win11 统一分层合成（Mode A）**：采用 `WS_EX_LAYERED` + `UpdateLayeredWindow` + Direct2D Software（WARP），支持真实 **亚克力透明 (Acrylic)**、桌面壁纸模糊 **云母 / 深云母 (Mica / MicaAlt)**、自定义壁纸与渐变、`0~24 px` 抗锯齿圆角、卡片遮罩浓度，以及 **界面字体 / 字号** 实时调节。
-- **跨屏一致性与顺手交互**：支持全局热键（默认 `Ctrl+Q`）与鼠标中键光标左上角对齐呼出；跨 2K / 1080p 不同 DPI 屏幕呼出时自动保持 **每行图标列数一致**；右上角工具栏支持悬停文字提示。
-- **中英双语界面（zh-CN / en-US）**：支持跟随系统或一键切换简体中文 / English，设置窗、主界面、右键菜单、弹窗与托盘菜单实时同步。
+- **统一自绘圆角菜单 & 顺手交互**：
+  - 左侧分组栏底部内置 **`+ 分组` / `关联`** 快捷按钮，支持无定时器跟手拖动排序（原位虚化 + 插入指示线 + 悬浮预览）；
+  - 图标下方名称支持 **两行自动换行** 且保持整行图标严格水平对齐；
+  - 分组右键、条目区右键与托盘右键全部采用统一深/浅色 Direct2D 圆角自绘菜单；
+  - 支持全局热键（默认 `Ctrl+Q`）与鼠标中键光标左上角对齐呼出、跨屏保持每行图标列数一致、工具栏按钮悬停文字提示。
+- **中英双语界面（zh-CN / en-US）**：支持跟随系统或一键切换简体中文 / English，全界面实时生效。
 - **离线内置拼音检索**：编译期嵌入 `U+4E00..U+9FA5` 汉字拼音表，支持全拼、首字母（含英文驼峰缩写如 `vsc` → `Visual Studio Code`）与高频权重排序。
-- **Schema v1 无缝互通 & 原子数据安全**：直接兼容 `GeekDeskNext` 的 `settings.json` 与 `catalog.json`；全量原子写入（`WriteFile` + `FlushFileBuffers` + `MoveFileExW`）、每日快照、启动损坏自动隔离恢复，以及 `.gdbackup` 单文件导出/回滚恢复。
+- **Schema v1 无缝互通 & 一键状态诊断**：直接兼容 `GeekDeskNext` 的 `settings.json` 与 `catalog.json`；全量原子写入、每日快照、损坏自动恢复与 `.gdbackup` 单文件备份恢复；内置一键运行状态诊断与剪贴板报告导出。
 
 ---
 
@@ -23,11 +31,11 @@
 
 | 检查项目 | 实测结果 |
 | :--- | :--- |
-| 单文件可执行体积 | `GeekDeskCpp.exe` 约 **2.65 MB**；便携压缩包约 **1.14 MB** |
+| 单文件可执行体积 | `GeekDeskCpp.exe` 约 **2.72 MB**；便携压缩包约 **1.17 MB** |
 | 外部依赖审计（`objdump -p`） | 仅依赖 Windows 系统 DLL；**无** MinGW 运行时 DLL、**无** GPU 硬件用户态驱动、**无** `Everything*.dll` |
 | 冷启动 + 首帧渲染（`--smoke-ui`） | **~92 ms**，Private Bytes **~11–12 MB**（Working Set ~25 MB） |
 | 真实目录加载建索引（9 分组 / 78 条目） | **~15 ms** |
-| 200 轮高强度压测（`--soak-test 200`） | GDI `63 -> 69`、USER `48 -> 49`、Handles `351 -> 351`、Private Bytes `14.28 MB -> 14.86 MB`（零泄漏） |
+| 200 轮高强度压测（`--soak-test 200`） | GDI `63 -> 69`、USER `47 -> 48`、Handles `348 -> 348`、Private Bytes `15.59 MB -> 17.54 MB`（零泄漏） |
 | 日常驻留使用（78 条目 + 图标缓存） | 私有内存约 **22–24 MB**，空闲 CPU **0%**，显存 **0 MB** |
 
 ---

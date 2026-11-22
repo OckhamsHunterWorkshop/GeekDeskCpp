@@ -6,8 +6,8 @@ IDI_APPICON ICON "AppIcon.ico"
 1 24 "app.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION 0,2,0,0
+ PRODUCTVERSION 0,2,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -22,13 +22,13 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "GeekDeskCpp"
+            VALUE "CompanyName", "Ockham's Hunter Workshop"
             VALUE "FileDescription", "GeekDeskCpp Native Desktop Launcher"
-            VALUE "FileVersion", "0.1.0.0"
+            VALUE "FileVersion", "0.2.0-beta"
             VALUE "InternalName", "GeekDeskCpp.exe"
             VALUE "OriginalFilename", "GeekDeskCpp.exe"
             VALUE "ProductName", "GeekDeskCpp"
-            VALUE "ProductVersion", "0.1.0.0"
+            VALUE "ProductVersion", "0.2.0-beta"
         END
     END
     BLOCK "VarFileInfo"
