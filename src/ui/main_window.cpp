@@ -925,6 +925,7 @@ bool MainWindow::PresentLayeredFrame() {
     state.dragTargetTileIdx = (dragActive_ && dragCandidate_ == DragKind::Tile) ? dragTargetTileIdx_ : -1;
     state.draggingGroupIdx = (dragActive_ && dragCandidate_ == DragKind::Group) ? dragStartIndex_ : -1;
     state.dragTargetGroupIdx = dragActive_ ? dragTargetGroupIdx_ : -1;
+    state.dragGroupCursorYDip = (dragActive_ && dragCandidate_ == DragKind::Group) ? dragGroupCursorYDip_ : -1.0f;
     state.hoveredHeaderButton = hoveredHeaderBtn_;
     state.hoveredSidebarButton = hoveredSidebarBtn_;
     state.alwaysTopmost = settings_.window.alwaysTopmost;
@@ -990,9 +991,38 @@ void MainWindow::OnMouseMove(int xPx, int yPx) {
             int nextTargetTile = -1;
 
             if (dragCandidate_ == DragKind::Group) {
-                if (hitGrp >= 0 && hitGrp != dragStartIndex_) {
-                    nextTargetGrp = hitGrp;
+                dragGroupCursorYDip_ = yDip;
+                int visibleCount = 0;
+                int gapIdx = 0;
+                bool gapFound = false;
+                for (std::size_t gi = 0; gi < layout_.groupRects.size(); ++gi) {
+                    const RectDip& gr = layout_.groupRects[gi];
+                    if (gr.Height() <= 0.0f) {
+                        continue;
+                    }
+                    ++visibleCount;
+                    const float midY = (gr.top + gr.bottom) * 0.5f;
+                    if (!gapFound && yDip < midY) {
+                        gapIdx = static_cast<int>(gi);
+                        gapFound = true;
+                    }
                 }
+                if (!gapFound) {
+                    gapIdx = visibleCount;
+                }
+                if (visibleCount > 0 && dragStartIndex_ >= 0) {
+                    if (gapIdx == dragStartIndex_ || gapIdx == dragStartIndex_ + 1) {
+                        nextTargetGrp = -1;
+                    } else if (gapIdx < dragStartIndex_) {
+                        nextTargetGrp = gapIdx;
+                    } else {
+                        nextTargetGrp = gapIdx - 1;
+                    }
+                }
+                dragTargetGroupIdx_ = nextTargetGrp;
+                dragTargetTileIdx_ = -1;
+                RequestRender();
+                return;
             } else if (dragCandidate_ == DragKind::Tile) {
                 if (hitGrp >= 0 && static_cast<std::size_t>(hitGrp) != activeGroupIndex_ &&
                     static_cast<std::size_t>(hitGrp) < catalog_.groups.size() &&
@@ -2555,6 +2585,7 @@ void MainWindow::CancelInternalDrag() {
         dragStartIndex_ = -1;
         dragTargetTileIdx_ = -1;
         dragTargetGroupIdx_ = -1;
+        dragGroupCursorYDip_ = -1.0f;
         RequestRender();
     }
 }

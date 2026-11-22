@@ -104,6 +104,7 @@ struct RenderState {
     int dragTargetTileIdx = -1;
     int draggingGroupIdx = -1;
     int dragTargetGroupIdx = -1;
+    float dragGroupCursorYDip = -1.0f;
     HeaderButton hoveredHeaderButton = HeaderButton::None;
     SidebarButton hoveredSidebarButton = SidebarButton::None;
     bool alwaysTopmost = false;

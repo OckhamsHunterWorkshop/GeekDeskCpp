@@ -248,7 +248,8 @@ bool D2DRenderer::EnsureTextFormats(std::string_view fontFamily, int fontSize) {
 
     auto makeFmt = [this, &wFamily](platform::ComPtr<IDWriteTextFormat>& out, float size,
                                     DWRITE_FONT_WEIGHT weight, DWRITE_TEXT_ALIGNMENT hAlign,
-                                    DWRITE_PARAGRAPH_ALIGNMENT vAlign, bool wrap, bool ellipsis) {
+                                    DWRITE_PARAGRAPH_ALIGNMENT vAlign, DWRITE_WORD_WRAPPING wrap,
+                                    bool ellipsis) {
         out.Reset();
         if (FAILED(dwriteFactory_->CreateTextFormat(wFamily.c_str(), nullptr, weight,
                                                     DWRITE_FONT_STYLE_NORMAL,
@@ -258,7 +259,7 @@ bool D2DRenderer::EnsureTextFormats(std::string_view fontFamily, int fontSize) {
         }
         out->SetTextAlignment(hAlign);
         out->SetParagraphAlignment(vAlign);
-        out->SetWordWrapping(wrap ? DWRITE_WORD_WRAPPING_WRAP : DWRITE_WORD_WRAPPING_NO_WRAP);
+        out->SetWordWrapping(wrap);
         if (ellipsis) {
             platform::ComPtr<IDWriteInlineObject> localTrim;
             if (SUCCEEDED(dwriteFactory_->CreateEllipsisTrimmingSign(
@@ -274,23 +275,26 @@ bool D2DRenderer::EnsureTextFormats(std::string_view fontFamily, int fontSize) {
 
     const bool ok =
         makeFmt(brandFmt_, base + 2.5f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP, true) &&
         makeFmt(groupFmt_, base + 1.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP, true) &&
         makeFmt(countFmt_, std::max(10.0f, base - 1.0f), DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
+                DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                DWRITE_WORD_WRAPPING_NO_WRAP, false) &&
         makeFmt(searchFmt_, base + 1.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_LEADING,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP, false) &&
         makeFmt(itemTitleFmt_, base, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_PARAGRAPH_ALIGNMENT_NEAR, true, true) &&
+                DWRITE_PARAGRAPH_ALIGNMENT_NEAR, DWRITE_WORD_WRAPPING_EMERGENCY_BREAK, true) &&
         makeFmt(badgeFmt_, 18.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, false) &&
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_NO_WRAP, false) &&
         makeFmt(statusFmt_, std::max(10.0f, base - 1.0f), DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true) &&
+                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                DWRITE_WORD_WRAPPING_NO_WRAP, true) &&
         makeFmt(emptyFmt_, base + 2.0f, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, true, false) &&
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_WORD_WRAPPING_WRAP, false) &&
         makeFmt(sidebarBtnFmt_, std::max(10.0f, base - 0.5f), DWRITE_FONT_WEIGHT_NORMAL,
-                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, false, true);
+                DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
+                DWRITE_WORD_WRAPPING_NO_WRAP, true);
     if (ok) {
         cachedFontFamily_ = family;
         cachedFontSize_ = clampedSize;
@@ -494,7 +498,7 @@ LayoutSnapshot D2DRenderer::ComputeLayout(const core::AppSettings& settings,
     const float iconSize = static_cast<float>(std::clamp(settings.appearance.iconSize, 28, 96));
     const float fontSizeDip = static_cast<float>(std::clamp(settings.appearance.fontSize, 10, 20));
     const float tileW = iconSize + 40.0f;
-    const float tileH = settings.appearance.showItemTitle ? (iconSize + fontSizeDip * 2.2f + 18.0f)
+    const float tileH = settings.appearance.showItemTitle ? (iconSize + fontSizeDip * 3.1f + 18.0f)
                                                           : (iconSize + 20.0f);
     snap.rowStrideDip = tileH + kGridGap;
 
@@ -1010,20 +1014,24 @@ bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
         if (r.Height() <= 0.0f) {
             continue;
         }
+        const bool isDragSrc = (static_cast<int>(i) == state.draggingGroupIdx);
         const bool isActive = (!state.isSearchActive && i == state.activeGroupIndex);
         const bool isHovered = (static_cast<int>(i) == state.hoveredGroupIdx);
-        const bool isDropHit = (static_cast<int>(i) == state.dropHighlightGroupIdx ||
-                                static_cast<int>(i) == state.dragTargetGroupIdx);
+        const bool isDropHit = (static_cast<int>(i) == state.dropHighlightGroupIdx);
+        const float rowAlpha = isDragSrc ? 0.30f : 1.0f;
         if (isActive || isHovered || isDropHit) {
             solidBrush_->SetColor(
-                ToD2D((isActive || isDropHit) ? pal.tileSelectedBg : pal.tileHoverBg));
+                ToD2D((isActive || isDropHit) ? pal.tileSelectedBg : pal.tileHoverBg, rowAlpha));
             dcTarget_->FillRoundedRectangle(ToRounded(r, 6.0f, 6.0f), solidBrush_.Get());
         }
         if (isDropHit) {
             solidBrush_->SetColor(ToD2D(pal.accent));
             dcTarget_->DrawRoundedRectangle(ToRounded(r, 6.0f, 6.0f), solidBrush_.Get(), 1.5f);
+        } else if (isDragSrc) {
+            solidBrush_->SetColor(ToD2D(pal.accent, 0.45f));
+            dcTarget_->DrawRoundedRectangle(ToRounded(r, 6.0f, 6.0f), solidBrush_.Get(), 1.0f);
         }
-        if (isActive) {
+        if (isActive && !isDragSrc) {
             solidBrush_->SetColor(ToD2D(pal.accent));
             dcTarget_->FillRoundedRectangle(
                 D2D1_ROUNDED_RECT{D2D1_RECT_F{r.left + 2.0f, r.top + 7.0f, r.left + 5.0f,
@@ -1034,30 +1042,89 @@ bool D2DRenderer::RenderToLayeredWindow(HWND hwnd,
 
         const auto& grp = (*state.groups)[i];
         const float cy = (r.top + r.bottom) * 0.5f;
-        solidBrush_->SetColor(ToD2D(isActive ? pal.accent : pal.textSecondary));
+        solidBrush_->SetColor(ToD2D(isActive ? pal.accent : pal.textSecondary, rowAlpha));
         DrawFolderGlyph(dcTarget_.Get(), solidBrush_.Get(), r.left + 12.0f, cy);
         if (grp.kind == core::GroupKind::LinkedFolder) {
-            solidBrush_->SetColor(ToD2D(pal.accent));
+            solidBrush_->SetColor(ToD2D(pal.accent, rowAlpha));
             dcTarget_->FillEllipse(D2D1_ELLIPSE{D2D1_POINT_2F{r.left + 24.5f, cy + 4.5f}, 2.2f, 2.2f},
                                    solidBrush_.Get());
         }
 
         const RectDip nameRect{r.left + 32.0f, r.top, r.right - 34.0f, r.bottom};
         const std::wstring wName = core::utf8::Utf8ToWide(grp.name);
-        solidBrush_->SetColor(ToD2D(pal.textPrimary));
+        solidBrush_->SetColor(ToD2D(pal.textPrimary, rowAlpha));
         dcTarget_->DrawTextW(wName.data(), static_cast<UINT32>(wName.size()), groupFmt_.Get(),
                              ToRect(nameRect), solidBrush_.Get());
 
         const RectDip countRect{r.right - 34.0f, r.top, r.right - 8.0f, r.bottom};
         const std::wstring wCount = std::to_wstring(grp.items.size());
-        solidBrush_->SetColor(ToD2D(pal.textSecondary));
+        solidBrush_->SetColor(ToD2D(pal.textSecondary, rowAlpha));
         dcTarget_->DrawTextW(wCount.data(), static_cast<UINT32>(wCount.size()), countFmt_.Get(),
                              ToRect(countRect), solidBrush_.Get());
     }
 
+    // Group reorder insertion indicator line & floating ghost pill (cursor-driven, zero timers)
+    const float footerDivY = outLayout.sidebarRect.bottom - 40.0f;
+    if (state.draggingGroupIdx >= 0 &&
+        static_cast<std::size_t>(state.draggingGroupIdx) < state.groups->size()) {
+        if (state.dragTargetGroupIdx >= 0 &&
+            static_cast<std::size_t>(state.dragTargetGroupIdx) < outLayout.groupRects.size() &&
+            state.dragTargetGroupIdx != state.draggingGroupIdx) {
+            const RectDip& tr = outLayout.groupRects[static_cast<std::size_t>(state.dragTargetGroupIdx)];
+            if (tr.Height() > 0.0f) {
+                const float lineY =
+                    (state.dragTargetGroupIdx < state.draggingGroupIdx) ? (tr.top - 2.0f)
+                                                                        : (tr.bottom + 2.0f);
+                solidBrush_->SetColor(ToD2D(pal.accent));
+                dcTarget_->FillRoundedRectangle(
+                    D2D1_ROUNDED_RECT{
+                        D2D1_RECT_F{outLayout.sidebarRect.left + 10.0f, lineY - 1.25f,
+                                    outLayout.sidebarRect.right - 8.0f, lineY + 1.25f},
+                        1.25f, 1.25f},
+                    solidBrush_.Get());
+                dcTarget_->FillEllipse(
+                    D2D1_ELLIPSE{D2D1_POINT_2F{outLayout.sidebarRect.left + 10.0f, lineY}, 3.5f,
+                                 3.5f},
+                    solidBrush_.Get());
+            }
+        }
+
+        if (state.dragGroupCursorYDip > 0.0f) {
+            const float ghostTop = std::clamp(
+                state.dragGroupCursorYDip - kGroupRowH * 0.5f, outLayout.sidebarRect.top + 4.0f,
+                std::max(outLayout.sidebarRect.top + 4.0f, footerDivY - kGroupRowH - 4.0f));
+            const RectDip ghostR{outLayout.sidebarRect.left + 8.0f, ghostTop,
+                                 outLayout.sidebarRect.right - 4.0f, ghostTop + kGroupRowH};
+            const ColorRgba ghostBg = pal.isDark ? ColorRgba{0.18f, 0.24f, 0.36f, 0.90f}
+                                                 : ColorRgba{1.0f, 1.0f, 1.0f, 0.92f};
+            solidBrush_->SetColor(ToD2D(ghostBg));
+            dcTarget_->FillRoundedRectangle(ToRounded(ghostR, 6.0f, 6.0f), solidBrush_.Get());
+            solidBrush_->SetColor(ToD2D(pal.accent, 0.90f));
+            dcTarget_->DrawRoundedRectangle(ToRounded(ghostR, 6.0f, 6.0f), solidBrush_.Get(), 1.4f);
+
+            const auto& srcGrp = (*state.groups)[static_cast<std::size_t>(state.draggingGroupIdx)];
+            const float gcy = (ghostR.top + ghostR.bottom) * 0.5f;
+            solidBrush_->SetColor(ToD2D(pal.accent));
+            DrawFolderGlyph(dcTarget_.Get(), solidBrush_.Get(), ghostR.left + 12.0f, gcy);
+
+            const RectDip gNameRc{ghostR.left + 32.0f, ghostR.top, ghostR.right - 34.0f,
+                                  ghostR.bottom};
+            const std::wstring wGName = core::utf8::Utf8ToWide(srcGrp.name);
+            solidBrush_->SetColor(ToD2D(pal.textPrimary));
+            dcTarget_->DrawTextW(wGName.data(), static_cast<UINT32>(wGName.size()),
+                                 groupFmt_.Get(), ToRect(gNameRc), solidBrush_.Get());
+
+            const RectDip gCountRc{ghostR.right - 34.0f, ghostR.top, ghostR.right - 8.0f,
+                                   ghostR.bottom};
+            const std::wstring wGCount = std::to_wstring(srcGrp.items.size());
+            solidBrush_->SetColor(ToD2D(pal.textSecondary));
+            dcTarget_->DrawTextW(wGCount.data(), static_cast<UINT32>(wGCount.size()),
+                                 countFmt_.Get(), ToRect(gCountRc), solidBrush_.Get());
+        }
+    }
+
     // Sidebar bottom action buttons: + Group & Link Folder
     solidBrush_->SetColor(ToD2D(pal.divider));
-    const float footerDivY = outLayout.sidebarRect.bottom - 40.0f;
     dcTarget_->DrawLine(D2D1_POINT_2F{outLayout.sidebarRect.left + 8.0f, footerDivY},
                         D2D1_POINT_2F{outLayout.sidebarRect.right - 8.0f, footerDivY},
                         solidBrush_.Get(), 1.0f);

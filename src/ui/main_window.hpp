@@ -198,6 +198,7 @@ private:
     POINT dragOriginPx_{};
     int dragTargetTileIdx_ = -1;
     int dragTargetGroupIdx_ = -1;
+    float dragGroupCursorYDip_ = -1.0f;
     HeaderButton hoveredHeaderBtn_ = HeaderButton::None;
     SidebarButton hoveredSidebarBtn_ = SidebarButton::None;
 
