@@ -763,3 +763,18 @@ TEST_CASE("folder watcher survives rapid Start/Stop restarts without deadlock") 
     watcher.Stop();
     CHECK(hits.load() >= 1);
 }
+
+TEST_CASE("windows path normalization strips quotes, trims, expands env vars, and normalizes slashes") {
+    const std::filesystem::path emptyNorm =
+        geekdesk::core::utf8::NormalizeWindowsPathInput(L"   \"\"  ");
+    CHECK(emptyNorm.empty());
+
+    const std::filesystem::path quotedNorm =
+        geekdesk::core::utf8::NormalizeWindowsPathInput(L"  \"C:/Windows/System32/notepad.exe\"  ");
+    CHECK(quotedNorm.wstring() == L"C:\\Windows\\System32\\notepad.exe");
+
+    const std::filesystem::path envNorm =
+        geekdesk::core::utf8::NormalizeWindowsPathInput(L"\"%SystemRoot%/notepad.exe\"");
+    CHECK(envNorm.wstring().find(L"%SystemRoot%") == std::wstring::npos);
+    CHECK(envNorm.filename().wstring() == L"notepad.exe");
+}

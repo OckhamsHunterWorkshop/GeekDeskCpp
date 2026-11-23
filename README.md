@@ -10,7 +10,7 @@
 > **设计哲学：做减法，少即是多。**  
 > 砍掉动辄 110~330 MB 内存的 .NET/WPF 运行时、砍掉臃肿的 Everything 全盘检索与过时迁移包袱，只保留启动器最核心的 **毫秒级呼出、离线拼音直达、文件夹联动、Win10/Win11 统一分层视效与可靠的数据备份恢复**。
 
-<img width="824" height="620" alt="image" src="https://github.com/user-attachments/assets/a0e8f4d1-fd9d-45e9-97d6-7c7f73e265bf" />
+<img width="824" height="620" alt="GeekDeskCpp" src="./OckhamsHunterWorkshop.png" />
 
 ---
 

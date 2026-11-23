@@ -1432,11 +1432,18 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
         case ItemMenuAction::OpenLocation:
             if (foundIndices) {
                 const auto& item = catalog_.groups[targetGroupIdx].items[targetItemIdx];
-                const std::filesystem::path p =
-                    core::utf8::PathFromUtf8((item.lnkPath.has_value() && !item.lnkPath->empty())
-                                                 ? *item.lnkPath
-                                                 : item.targetPath);
-                (void)platform::RevealInExplorer(p);
+                const auto revealRes = platform::RevealItemLocation(item);
+                if (logger_ != nullptr) {
+                    logger_->Info("OpenLocation item='" + item.name + "' target='" +
+                                  item.targetPath + "' lnk='" + item.lnkPath.value_or("") +
+                                  "' resolved='" + revealRes.resolvedPath +
+                                  "' ok=" + (revealRes.ok ? "true" : "false"));
+                }
+                if (!revealRes.ok) {
+                    statusText_ = (en ? "Open location failed: " : "\u6253\u5F00\u6240\u5728\u4F4D\u7F6E\u5931\u8D25: ") +
+                                  revealRes.error;
+                    RequestRender();
+                }
             }
             break;
         case ItemMenuAction::EditItem:

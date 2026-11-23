@@ -149,6 +149,54 @@ std::string_view StripUtf8Bom(std::string_view text) {
     return text;
 }
 
+std::wstring ExpandEnvVarsWide(std::wstring_view input) {
+    if (input.empty()) {
+        return {};
+    }
+    std::wstring src(input);
+    const DWORD needed = ExpandEnvironmentStringsW(src.c_str(), nullptr, 0);
+    if (needed == 0) {
+        return src;
+    }
+    std::wstring out(needed, L'\0');
+    const DWORD written = ExpandEnvironmentStringsW(src.c_str(), out.data(), needed);
+    if (written == 0) {
+        return src;
+    }
+    if (!out.empty() && out.back() == L'\0') {
+        out.pop_back();
+    }
+    return out;
+}
+
+std::filesystem::path NormalizeWindowsPathInput(std::wstring_view input) {
+    auto isSpace = [](wchar_t ch) {
+        return ch == L' ' || ch == L'\t' || ch == L'\r' || ch == L'\n';
+    };
+    while (!input.empty() && isSpace(input.front())) {
+        input.remove_prefix(1);
+    }
+    while (!input.empty() && isSpace(input.back())) {
+        input.remove_suffix(1);
+    }
+    if (input.size() >= 2 && input.front() == L'"' && input.back() == L'"') {
+        input.remove_prefix(1);
+        input.remove_suffix(1);
+        while (!input.empty() && isSpace(input.front())) {
+            input.remove_prefix(1);
+        }
+        while (!input.empty() && isSpace(input.back())) {
+            input.remove_suffix(1);
+        }
+    }
+    if (input.empty()) {
+        return {};
+    }
+    std::filesystem::path normalized(ExpandEnvVarsWide(input));
+    normalized.make_preferred();
+    return normalized;
+}
+
 std::string GenerateUuidV4() {
     GUID guid{};
     if (FAILED(CoCreateGuid(&guid))) {

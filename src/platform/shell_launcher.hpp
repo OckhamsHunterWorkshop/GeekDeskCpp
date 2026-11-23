@@ -10,6 +10,7 @@ namespace geekdesk::platform {
 struct LaunchResult {
     bool ok = false;
     std::string error;
+    std::string resolvedPath;
 };
 
 /// Launch a LaunchItem via Windows ShellExecuteExW (supporting files, .lnk, folders, URLs,
@@ -18,5 +19,8 @@ struct LaunchResult {
 
 /// Open a local folder in Windows Explorer.
 [[nodiscard]] LaunchResult OpenDirectoryInExplorer(const std::filesystem::path& dir);
+
+/// Reveal a LaunchItem's real target executable/file in Windows Explorer.
+[[nodiscard]] LaunchResult RevealItemLocation(const core::LaunchItem& item);
 
 } // namespace geekdesk::platform

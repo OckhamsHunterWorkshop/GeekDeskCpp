@@ -32,6 +32,12 @@ namespace geekdesk::core::utf8 {
 /// Strip a UTF-8 BOM (EF BB BF) prefix if present.
 [[nodiscard]] std::string_view StripUtf8Bom(std::string_view text);
 
+/// Expand %ENV_VAR% placeholders in a UTF-16 string via ExpandEnvironmentStringsW.
+[[nodiscard]] std::wstring ExpandEnvVarsWide(std::wstring_view input);
+
+/// Trim whitespace, strip outer quotes, expand %ENV_VAR%, and normalize separators.
+[[nodiscard]] std::filesystem::path NormalizeWindowsPathInput(std::wstring_view input);
+
 /// Generate a lowercase RFC 4122 UUID string via CoCreateGuid.
 [[nodiscard]] std::string GenerateUuidV4();
 

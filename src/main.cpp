@@ -427,8 +427,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         dataDir, settingsRes.value.behavior.backupRetentionDays);
 
     geekdesk::storage::FileLogger logger(dataDir / L"logs", 14);
-    logger.Info("GeekDeskCpp started (groups=" +
-                std::to_string(catalogRes.value.groups.size()) + ")");
+    logger.Info(std::string("GeekDeskCpp started (built=") + __DATE__ + " " + __TIME__ +
+                ", groups=" + std::to_string(catalogRes.value.groups.size()) + ")");
     if (settingsRes.recoveredFromBackup) {
         logger.Warn("Recovered settings.json from daily backup");
     }

@@ -319,8 +319,12 @@ LRESULT CALLBACK ItemDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
                 return 0;
             }
 
+            const bool targetChanged = (trimTarget != st->item->targetPath);
             st->item->name.assign(trimName);
             st->item->targetPath.assign(trimTarget);
+            if (targetChanged) {
+                st->item->lnkPath = std::nullopt;
+            }
             st->item->kind = ComboIndexToKind(
                 static_cast<int>(SendMessageW(st->kindCombo, CB_GETCURSEL, 0, 0)));
             st->item->arguments = core::utf8::WideToUtf8(GetControlText(st->argsEdit));

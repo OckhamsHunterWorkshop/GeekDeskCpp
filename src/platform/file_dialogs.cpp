@@ -1,8 +1,10 @@
 #include "platform/file_dialogs.hpp"
 
+#include "core/utf8.hpp"
 #include "platform/com_ptr.hpp"
 
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 
 namespace geekdesk::platform {
@@ -124,14 +126,57 @@ std::optional<std::filesystem::path> SaveFileDialog(HWND owner,
     return ReadDialogResult(dialog.Get());
 }
 
-bool RevealInExplorer(const std::filesystem::path& path) {
-    if (path.empty()) {
+namespace {
+
+bool SelectPathWithShellApi(const std::filesystem::path& normalized) {
+    PIDLIST_ABSOLUTE itemPidl = ILCreateFromPathW(normalized.c_str());
+    if (itemPidl == nullptr) {
         return false;
     }
-    const std::wstring params = L"/select,\"" + path.wstring() + L"\"";
-    const HINSTANCE h =
-        ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(h) > 32;
+
+    HRESULT hr = E_FAIL;
+    PIDLIST_ABSOLUTE parentPidl = ILClone(itemPidl);
+    if (parentPidl != nullptr) {
+        if (ILRemoveLastID(parentPidl)) {
+            PCUITEMID_CHILD childPidl = ILFindLastID(itemPidl);
+            hr = SHOpenFolderAndSelectItems(parentPidl, 1, &childPidl, 0);
+        }
+        ILFree(parentPidl);
+    }
+    if (FAILED(hr)) {
+        hr = SHOpenFolderAndSelectItems(itemPidl, 0, nullptr, 0);
+    }
+    ILFree(itemPidl);
+    return SUCCEEDED(hr);
+}
+
+} // namespace
+
+bool RevealInExplorer(const std::filesystem::path& path) {
+    const std::filesystem::path normalized =
+        core::utf8::NormalizeWindowsPathInput(path.wstring());
+    if (normalized.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    if (std::filesystem::exists(normalized, ec)) {
+        if (SelectPathWithShellApi(normalized)) {
+            return true;
+        }
+        const std::wstring params = L"/select,\"" + normalized.wstring() + L"\"";
+        const HINSTANCE h =
+            ShellExecuteW(nullptr, L"open", L"explorer.exe", params.c_str(), nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<INT_PTR>(h) > 32;
+    }
+
+    const std::filesystem::path parent = normalized.parent_path();
+    if (!parent.empty() && std::filesystem::exists(parent, ec)) {
+        const HINSTANCE h =
+            ShellExecuteW(nullptr, L"open", parent.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<INT_PTR>(h) > 32;
+    }
+    return false;
 }
 
 } // namespace geekdesk::platform
