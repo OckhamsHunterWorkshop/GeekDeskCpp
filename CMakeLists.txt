@@ -1,5 +1,27 @@
 cmake_minimum_required(VERSION 3.24)
-project(GeekDeskCpp VERSION 0.2.0 LANGUAGES C CXX)
+project(GeekDeskCpp VERSION 0.2.1 LANGUAGES C CXX)
+
+set(GEEKDESK_VERSION_SUFFIX "-beta")
+set(GEEKDESK_VERSION_STR "${PROJECT_VERSION}${GEEKDESK_VERSION_SUFFIX}")
+set(GEEKDESK_GIT_HASH "dev")
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE _gd_git_hash
+    RESULT_VARIABLE _gd_git_rc
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(_gd_git_rc EQUAL 0 AND NOT "${_gd_git_hash}" STREQUAL "")
+    set(GEEKDESK_GIT_HASH "${_gd_git_hash}")
+endif()
+set(GEEKDESK_DISPLAY_VERSION "v${GEEKDESK_VERSION_STR} (${GEEKDESK_GIT_HASH})")
+
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/resources/version_info.hpp.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/version_info.hpp
+    @ONLY
+)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -34,6 +56,7 @@ add_library(geekdesk_core STATIC
     src/core/catalog_sorter.cpp
     src/core/folder_sync.cpp
     src/core/search_engine.cpp
+    src/core/desktop_archive_policy.cpp
     src/platform/folder_watcher.cpp
     src/storage/json_codec.cpp
     src/storage/atomic_writer.cpp
@@ -46,6 +69,7 @@ add_library(geekdesk_core STATIC
 target_include_directories(geekdesk_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/resources
+    ${CMAKE_CURRENT_BINARY_DIR}/generated
 )
 
 target_compile_definitions(geekdesk_core PUBLIC
@@ -88,6 +112,7 @@ add_executable(GeekDeskCpp WIN32
     src/platform/shell_launcher.cpp
     src/platform/single_instance.cpp
     src/platform/file_dialogs.cpp
+    src/platform/desktop_archive.cpp
     src/ui/icon_cache.cpp
     src/ui/d2d_renderer.cpp
     src/ui/drag_drop.cpp

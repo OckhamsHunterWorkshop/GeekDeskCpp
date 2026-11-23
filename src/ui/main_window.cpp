@@ -2,12 +2,14 @@
 
 #include "core/catalog_mutator.hpp"
 #include "core/catalog_sorter.hpp"
+#include "core/desktop_archive_policy.hpp"
 #include "core/folder_sync.hpp"
 #include "core/i18n.hpp"
 #include "core/placement_math.hpp"
 #include "core/utf8.hpp"
 #include "platform/autostart.hpp"
 #include "platform/backdrop.hpp"
+#include "platform/desktop_archive.hpp"
 #include "platform/dpi_helper.hpp"
 #include "platform/file_dialogs.hpp"
 #include "platform/fullscreen_detector.hpp"
@@ -17,6 +19,7 @@
 #include "storage/json_codec.hpp"
 #include "ui/context_menus.hpp"
 #include "ui/item_dialogs.hpp"
+#include "version_info.hpp"
 
 #ifndef PSAPI_VERSION
 #define PSAPI_VERSION 2
@@ -42,6 +45,7 @@ constexpr UINT kMsgMiddleClick = WM_APP + 1;
 constexpr UINT kMsgTrayIcon = WM_APP + 2;
 constexpr UINT kMsgIconReady = WM_APP + 3;
 constexpr UINT kMsgFolderChanged = WM_APP + 4;
+constexpr UINT kMsgDeferredExternalDrop = WM_APP + 5;
 constexpr UINT kMsgRender = WM_APP + 104;
 
 constexpr UINT_PTR kTimerCaret = 1;
@@ -85,9 +89,7 @@ core::LaunchItem BuildLaunchItemFromPath(const std::filesystem::path& filePath) 
                 item.workingDirectory = resolved.workingDirectory;
             }
             item.kind = resolved.isUrl ? core::ItemKind::Url : core::ItemKind::File;
-            if (!resolved.isUrl) {
-                item.lnkPath = fullUtf8;
-            }
+            item.lnkPath = fullUtf8;
         } else {
             item.kind = core::ItemKind::File;
             item.targetPath = fullUtf8;
@@ -334,7 +336,7 @@ bool MainWindow::Create(HINSTANCE hInstance, bool registerSystemHooks) {
         }
 
         if (settings_.state.showTrayIcon) {
-            trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp");
+            trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp v" GEEKDESK_VERSION_WSTR);
         }
 
         // Synchronize startup AutoStart registry state with settings.behavior.autoStart cleanly
@@ -812,6 +814,10 @@ LRESULT MainWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case kMsgFolderChanged:
         OnFolderChangedNotifications();
+        return 0;
+
+    case kMsgDeferredExternalDrop:
+        ProcessDeferredExternalDrops();
         return 0;
 
     case WM_POWERBROADCAST:
@@ -1394,12 +1400,22 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
              catalog_.groups[targetGroupIdx].kind == core::GroupKind::Manual);
         const bool curAdmin =
             foundIndices ? catalog_.groups[targetGroupIdx].items[targetItemIdx].runAsAdmin : false;
+        bool canRestoreToDesktop = false;
+        if (foundIndices && settings_.behavior.desktopArchiveDir.has_value() &&
+            !settings_.behavior.desktopArchiveDir->empty()) {
+            const std::filesystem::path archiveRoot =
+                core::utf8::PathFromUtf8(*settings_.behavior.desktopArchiveDir);
+            canRestoreToDesktop =
+                core::FindArchivedPhysicalPath(catalog_.groups[targetGroupIdx].items[targetItemIdx],
+                                               archiveRoot)
+                    .has_value();
+        }
 
         ModalGuard guard(modalDepth_);
         const bool en = core::IsEnglishUi(settings_.appearance.language);
         const auto action = ShowItemContextMenu(
             hwnd_, screenPt, palette_.isDark, clickedItem && foundIndices, isManual, curAdmin,
-            settings_.behavior.itemSort, en);
+            settings_.behavior.itemSort, en, canRestoreToDesktop);
         if (!action.has_value()) {
             return;
         }
@@ -1442,6 +1458,49 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 if (!revealRes.ok) {
                     statusText_ = (en ? "Open location failed: " : "\u6253\u5F00\u6240\u5728\u4F4D\u7F6E\u5931\u8D25: ") +
                                   revealRes.error;
+                    RequestRender();
+                }
+            }
+            break;
+        case ItemMenuAction::RestoreToDesktop:
+            if (foundIndices && settings_.behavior.desktopArchiveDir.has_value() &&
+                !settings_.behavior.desktopArchiveDir->empty()) {
+                core::LaunchItem& item = catalog_.groups[targetGroupIdx].items[targetItemIdx];
+                const std::filesystem::path archiveRoot =
+                    core::utf8::PathFromUtf8(*settings_.behavior.desktopArchiveDir);
+                if (const auto archived = core::FindArchivedPhysicalPath(item, archiveRoot);
+                    archived.has_value()) {
+                    const auto restoreRes =
+                        platform::RestoreArchivedItemToDesktop(hwnd_, *archived);
+                    if (restoreRes.ok) {
+                        const std::string restoredUtf8 =
+                            core::utf8::PathToUtf8(restoreRes.restoredPath);
+                        if (item.lnkPath.has_value() && !item.lnkPath->empty() &&
+                            core::IsPathEqualOrUnder(
+                                core::utf8::NormalizeWindowsPathInput(
+                                    core::utf8::Utf8ToWide(*item.lnkPath)),
+                                archiveRoot)) {
+                            item.lnkPath = restoredUtf8;
+                        } else {
+                            item.targetPath = restoredUtf8;
+                        }
+                        if (logger_ != nullptr) {
+                            logger_->Info("RestoreToDesktop item='" + item.name + "' from='" +
+                                          core::utf8::PathToUtf8(*archived) + "' to='" +
+                                          restoredUtf8 + "'");
+                        }
+                        searchEngine_.Rebuild(catalog_);
+                        iconCache_.ClearMemoryCache();
+                        RebuildDisplayedItems();
+                        ScheduleSaveCatalog();
+                        statusText_ =
+                            en ? ("Restored to Desktop: " + item.name)
+                               : ("\u5DF2\u79FB\u56DE\u684C\u9762: " + item.name);
+                    } else {
+                        statusText_ =
+                            (en ? "Restore to Desktop failed: " : "\u79FB\u56DE\u684C\u9762\u5931\u8D25: ") +
+                            restoreRes.error;
+                    }
                     RequestRender();
                 }
             }
@@ -2153,7 +2212,7 @@ void MainWindow::RefreshHooksAndTray() {
         }
     }
     if (settings_.state.showTrayIcon) {
-        trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp");
+        trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp v" GEEKDESK_VERSION_WSTR);
     }
     if (logger_ != nullptr) {
         logger_->Info(std::string("System resume/unlock hook & tray refresh completed (mouseHook=") +
@@ -2183,6 +2242,8 @@ std::string MainWindow::BuildDiagnosticsReport() const {
     std::string out;
     out += "GeekDeskCpp Diagnostics\n";
     out += "=======================\n";
+    out += std::string("Version        : ") + GEEKDESK_DISPLAY_VERSION + " (built " + __DATE__ +
+           " " + __TIME__ + ")\n";
     out += "Data Dir       : " + core::utf8::PathToUtf8(dataRoot_) + "\n";
     out += "Groups / Items : " + std::to_string(catalog_.groups.size()) + " / " +
            std::to_string(totalItems) + "\n";
@@ -2435,7 +2496,7 @@ void MainWindow::ApplySettingsLive(const core::AppSettings& next) {
     }
     if (hooksRegistered_ && prev.state.showTrayIcon != next.state.showTrayIcon) {
         if (next.state.showTrayIcon) {
-            trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp");
+            trayIcon_.Show(hwnd_, kMsgTrayIcon, L"GeekDeskCpp v" GEEKDESK_VERSION_WSTR);
         } else {
             trayIcon_.Hide();
         }
@@ -2560,29 +2621,148 @@ void MainWindow::HandleExternalDropFiles(POINT screenPt,
         return;
     }
 
-    std::size_t added = 0;
-    for (const auto& p : paths) {
-        core::LaunchItem item = BuildLaunchItemFromPath(p);
-        if (core::AddItemToManualGroup(catalog_.groups[targetGroupIdx], std::move(item), true)) {
-            ++added;
-        }
+    if (paths.empty()) {
+        return;
     }
 
-    if (added > 0) {
-        core::SortItems(catalog_.groups[targetGroupIdx].items, settings_.behavior.itemSort);
-        if (targetGroupIdx != activeGroupIndex_) {
-            activeGroupIndex_ = targetGroupIdx;
-            settings_.state.lastSelectedGroupId = catalog_.groups[targetGroupIdx].id;
-            ScheduleSaveSettings();
+    pendingExternalDrops_.push_back(PendingExternalDrop{screenPt, targetGroupIdx, paths});
+    PostMessageW(hwnd_, kMsgDeferredExternalDrop, 0, 0);
+}
+
+void MainWindow::ProcessDeferredExternalDrops() {
+    while (!pendingExternalDrops_.empty()) {
+        PendingExternalDrop drop = std::move(pendingExternalDrops_.front());
+        pendingExternalDrops_.pop_front();
+
+        if (drop.targetGroupIdx >= catalog_.groups.size() ||
+            catalog_.groups[drop.targetGroupIdx].kind != core::GroupKind::Manual) {
+            continue;
         }
-        searchEngine_.Rebuild(catalog_);
-        RebuildDisplayedItems();
-        ScheduleSaveCatalog();
-        statusText_ = "\u5DF2\u62D6\u5165\u6DFB\u52A0 " + std::to_string(added) + " \u4E2A\u6761\u76EE";
-    } else {
-        statusText_ = "\u62D6\u5165\u7684\u6761\u76EE\u5DF2\u5B58\u5728";
+
+        const bool en = core::IsEnglishUi(settings_.appearance.language);
+        const core::DesktopKnownFolders desktops = platform::GetSystemDesktopFolders();
+        std::vector<std::size_t> desktopIndices;
+        for (std::size_t i = 0; i < drop.paths.size(); ++i) {
+            if (core::IsDirectChildOfDesktop(drop.paths[i], desktops)) {
+                desktopIndices.push_back(i);
+            }
+        }
+
+        std::size_t movedCount = 0;
+        std::size_t fallbackCount = 0;
+        if (!desktopIndices.empty()) {
+            ModalGuard guard(modalDepth_);
+            const auto action = ShowDesktopDropActionMenu(hwnd_, drop.screenPt, palette_.isDark,
+                                                          desktopIndices.size(), en);
+            if (!action.has_value()) {
+                continue;
+            }
+
+            if (*action == DesktopDropAction::ArchiveAndCleanDesktop) {
+                std::filesystem::path archiveRoot;
+                if (settings_.behavior.desktopArchiveDir.has_value() &&
+                    !settings_.behavior.desktopArchiveDir->empty()) {
+                    archiveRoot = core::utf8::NormalizeWindowsPathInput(
+                        core::utf8::Utf8ToWide(*settings_.behavior.desktopArchiveDir));
+                }
+
+                if (core::ValidateArchiveDirectory(archiveRoot, desktops, dataRoot_) !=
+                    core::ArchiveDirValidation::Ok) {
+                    const auto picked =
+                        platform::PickAndValidateDesktopArchiveDir(hwnd_, dataRoot_, en);
+                    if (!picked.has_value()) {
+                        statusText_ = en ? "Desktop archive canceled" : "\u5DF2\u53D6\u6D88\u684C\u9762\u6536\u7EB3";
+                        RequestRender();
+                        continue;
+                    }
+                    archiveRoot = *picked;
+                    settings_.behavior.desktopArchiveDir = core::utf8::PathToUtf8(archiveRoot);
+                    ScheduleSaveSettings();
+                    if (settingsWindow_.IsOpen()) {
+                        settingsWindow_.SyncFromExternalSettings(settings_);
+                    }
+                }
+
+                const std::filesystem::path destDir =
+                    archiveRoot /
+                    core::SanitizeGroupFolderName(catalog_.groups[drop.targetGroupIdx].name);
+                std::vector<std::filesystem::path> desktopSources;
+                desktopSources.reserve(desktopIndices.size());
+                for (const std::size_t idx : desktopIndices) {
+                    desktopSources.push_back(drop.paths[idx]);
+                }
+
+                const platform::ShellMoveBatchResult moveRes =
+                    platform::MovePathsWithShellOperation(hwnd_, desktopSources, destDir);
+                for (std::size_t k = 0; k < desktopIndices.size() && k < moveRes.finalPaths.size();
+                     ++k) {
+                    drop.paths[desktopIndices[k]] = moveRes.finalPaths[k];
+                }
+                movedCount = moveRes.movedCount;
+                fallbackCount = moveRes.fallbackCount;
+                if (logger_ != nullptr) {
+                    logger_->Info("DesktopDropArchive group='" +
+                                  catalog_.groups[drop.targetGroupIdx].name + "' dest='" +
+                                  core::utf8::PathToUtf8(destDir) + "' moved=" +
+                                  std::to_string(movedCount) + " fallback=" +
+                                  std::to_string(fallbackCount));
+                }
+            }
+        }
+
+        std::size_t added = 0;
+        std::size_t refreshedExisting = 0;
+        core::CategoryGroup& targetGroup = catalog_.groups[drop.targetGroupIdx];
+        for (const auto& p : drop.paths) {
+            core::LaunchItem item = BuildLaunchItemFromPath(p);
+            const std::optional<std::string> movedLnk = item.lnkPath;
+            const std::string targetLower =
+                core::utf8::ToLowerAscii(core::utf8::TrimAscii(item.targetPath));
+            if (core::AddItemToManualGroup(targetGroup, std::move(item), true)) {
+                ++added;
+            } else if (movedCount > 0 && movedLnk.has_value() && !movedLnk->empty()) {
+                for (auto& existing : targetGroup.items) {
+                    if (core::utf8::ToLowerAscii(core::utf8::TrimAscii(existing.targetPath)) ==
+                        targetLower) {
+                        existing.lnkPath = movedLnk;
+                        ++refreshedExisting;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (added > 0 || refreshedExisting > 0) {
+            core::SortItems(targetGroup.items, settings_.behavior.itemSort);
+            if (drop.targetGroupIdx != activeGroupIndex_) {
+                activeGroupIndex_ = drop.targetGroupIdx;
+                settings_.state.lastSelectedGroupId = targetGroup.id;
+                ScheduleSaveSettings();
+            }
+            searchEngine_.Rebuild(catalog_);
+            RebuildDisplayedItems();
+            ScheduleSaveCatalog();
+        }
+
+        if (movedCount > 0) {
+            statusText_ = en ? ("Archived " + std::to_string(movedCount) + " desktop item(s)")
+                             : ("\u5DF2\u6536\u7EB3 " + std::to_string(movedCount) + " \u9879\u5230\u5F52\u6863\u76EE\u5F55");
+            if (fallbackCount > 0) {
+                statusText_ += en ? (" (" + std::to_string(fallbackCount) + " kept on Desktop)")
+                                  : ("\uFF08" + std::to_string(fallbackCount) + " \u9879\u4FDD\u7559\u5728\u684C\u9762\u4EC5\u5EFA\u5165\u53E3\uFF09");
+            }
+        } else if (fallbackCount > 0) {
+            statusText_ = en ? ("Desktop move skipped; added " + std::to_string(added) + " entry(s)")
+                             : ("\u672A\u79FB\u52A8\u684C\u9762\u6587\u4EF6\uFF0C\u5DF2\u964D\u7EA7\u6DFB\u52A0 " +
+                                std::to_string(added) + " \u4E2A\u5165\u53E3");
+        } else if (added > 0) {
+            statusText_ = en ? ("Added " + std::to_string(added) + " item(s)")
+                             : ("\u5DF2\u62D6\u5165\u6DFB\u52A0 " + std::to_string(added) + " \u4E2A\u6761\u76EE");
+        } else {
+            statusText_ = en ? "Dropped item(s) already exist" : "\u62D6\u5165\u7684\u6761\u76EE\u5DF2\u5B58\u5728";
+        }
+        RequestRender();
     }
-    RequestRender();
 }
 
 void MainWindow::CancelInternalDrag() {

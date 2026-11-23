@@ -102,6 +102,9 @@ private:
         kIdGroupSortCombo,
         kIdItemSortCombo,
         kIdAutoStartCheck,
+        kIdDesktopArchiveLabel,
+        kIdPickDesktopArchiveBtn,
+        kIdClearDesktopArchiveBtn,
         // Data & Backup/Restore
         kIdStatsLabel,
         kIdRetentionEdit,
@@ -168,6 +171,7 @@ private:
     HWND groupSortCombo_ = nullptr;
     HWND itemSortCombo_ = nullptr;
     HWND autoStartCheck_ = nullptr;
+    HWND desktopArchiveLabel_ = nullptr;
 
     HWND statsLabel_ = nullptr;
     HWND retentionEdit_ = nullptr;

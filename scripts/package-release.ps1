@@ -1,6 +1,6 @@
 ﻿#Requires -Version 5.1
 param(
-    [string]$Version = "0.2.0-beta",
+    [string]$Version = "0.2.1-beta",
     [switch]$SkipCleanBuild
 )
 

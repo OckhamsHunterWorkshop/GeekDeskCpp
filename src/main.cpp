@@ -8,6 +8,7 @@
 #include "storage/json_codec.hpp"
 #include "storage/logger.hpp"
 #include "ui/main_window.hpp"
+#include "version_info.hpp"
 
 #ifndef PSAPI_VERSION
 #define PSAPI_VERSION 2
@@ -355,11 +356,18 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     int soakCycles = 0;
 
     for (std::size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == L"--version" || args[i] == L"-v") {
+            ConsoleOutput out;
+            out.WriteLine(std::string("GeekDeskCpp ") + GEEKDESK_DISPLAY_VERSION + " (built " +
+                          __DATE__ + " " + __TIME__ + ")");
+            return 0;
+        }
         if (args[i] == L"--help" || args[i] == L"-h") {
             ConsoleOutput out;
             out.WriteLine("GeekDeskCpp Native Desktop Launcher (Mode A Direct2D Software)");
             out.WriteLine("Usage:");
             out.WriteLine("  GeekDeskCpp.exe                               Launch desktop launcher UI");
+            out.WriteLine("  GeekDeskCpp.exe --version                     Print version and build stamp");
             out.WriteLine("  GeekDeskCpp.exe --data-dir <dir>              Override portable data directory");
             out.WriteLine("  GeekDeskCpp.exe --verify-data <data-dir>      Validate Schema v1 JSONs read-only");
             out.WriteLine("  GeekDeskCpp.exe --smoke-ui [--data-dir <dir>] Run Mode A UI smoke test");
@@ -427,7 +435,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
         dataDir, settingsRes.value.behavior.backupRetentionDays);
 
     geekdesk::storage::FileLogger logger(dataDir / L"logs", 14);
-    logger.Info(std::string("GeekDeskCpp started (built=") + __DATE__ + " " + __TIME__ +
+    logger.Info(std::string("GeekDeskCpp started (version=") + GEEKDESK_DISPLAY_VERSION +
+                ", built=" + __DATE__ + " " + __TIME__ +
                 ", groups=" + std::to_string(catalogRes.value.groups.size()) + ")");
     if (settingsRes.recoveredFromBackup) {
         logger.Warn("Recovered settings.json from daily backup");

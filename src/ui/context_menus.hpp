@@ -28,12 +28,18 @@ enum class ItemMenuAction : UINT {
     EditItem = 3004,
     ToggleRunAsAdmin = 3005,
     DeleteItem = 3006,
+    RestoreToDesktop = 3007,
     AddFile = 3010,
     AddFolder = 3011,
     AddCustom = 3012,
     SortCustom = 3020,
     SortCountDesc = 3021,
     SortNameAsc = 3022,
+};
+
+enum class DesktopDropAction : UINT {
+    ArchiveAndCleanDesktop = 3101,
+    AddEntryOnly = 3102,
 };
 
 struct PopupMenuItem {
@@ -66,6 +72,14 @@ struct PopupMenuItem {
                                                                 bool isManualGroup,
                                                                 bool runAsAdmin,
                                                                 core::SortOrder currentItemSort,
-                                                                bool englishUi = false);
+                                                                bool englishUi = false,
+                                                                bool canRestoreToDesktop = false);
+
+[[nodiscard]] std::optional<DesktopDropAction> ShowDesktopDropActionMenu(
+    HWND owner,
+    POINT screenPt,
+    bool isDark,
+    std::size_t desktopItemCount,
+    bool englishUi = false);
 
 } // namespace geekdesk::ui

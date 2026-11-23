@@ -5,11 +5,13 @@
 #include "core/placement_math.hpp"
 #include "core/utf8.hpp"
 #include "platform/backdrop.hpp"
+#include "platform/desktop_archive.hpp"
 #include "platform/dpi_helper.hpp"
 #include "platform/file_dialogs.hpp"
 #include "platform/shell_launcher.hpp"
 #include "resource.h"
 #include "storage/backup_manager.hpp"
+#include "version_info.hpp"
 
 #include <commctrl.h>
 #include <dwmapi.h>
@@ -517,6 +519,21 @@ LRESULT SettingsWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 working_.behavior.autoStart = checked(autoStartCheck_);
                 EmitSettingsChanged();
                 break;
+            case kIdPickDesktopArchiveBtn: {
+                const bool en = core::IsEnglishUi(working_.appearance.language);
+                if (auto chosen = platform::PickAndValidateDesktopArchiveDir(hwnd_, dataRoot_, en);
+                    chosen.has_value()) {
+                    working_.behavior.desktopArchiveDir = core::utf8::PathToUtf8(*chosen);
+                    PopulateFromSettings();
+                    EmitSettingsChanged();
+                }
+                break;
+            }
+            case kIdClearDesktopArchiveBtn:
+                working_.behavior.desktopArchiveDir = std::nullopt;
+                PopulateFromSettings();
+                EmitSettingsChanged();
+                break;
             case kIdApplyRetentionBtn: {
                 const std::string raw = core::utf8::WideToUtf8(ReadCtrlText(retentionEdit_));
                 int days = 7;
@@ -985,6 +1002,27 @@ void SettingsWindow::BuildControls() {
                            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdItemSortCombo)), hInst,
                            nullptr));
     AddSortItems(itemSortCombo_, en);
+    y1 += ScalePx(38, dpi_);
+
+    addLabel(1, en ? L"Desktop Archive:" : L"\u684C\u9762\u6536\u7EB3\u76EE\u5F55:", px,
+             y1 + ScalePx(4, dpi_), labelW, ScalePx(20, dpi_));
+    desktopArchiveLabel_ = addToTab(
+        1, CreateWindowExW(0, L"STATIC", en ? L"Not set" : L"\u672A\u8BBE\u7F6E",
+                           WS_CHILD | SS_PATHELLIPSIS | SS_CENTERIMAGE, ctrlX, y1, ctrlW,
+                           ScalePx(24, dpi_), hwnd_,
+                           reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDesktopArchiveLabel)),
+                           hInst, nullptr));
+    y1 += ScalePx(28, dpi_);
+    addToTab(1, CreateWindowExW(0, L"BUTTON", en ? L"Browse..." : L"\u9009\u62E9\u76EE\u5F55...",
+                                WS_CHILD | WS_TABSTOP, ctrlX, y1, ScalePx(115, dpi_),
+                                ScalePx(28, dpi_), hwnd_,
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdPickDesktopArchiveBtn)),
+                                hInst, nullptr));
+    addToTab(1, CreateWindowExW(0, L"BUTTON", en ? L"Clear" : L"\u6E05\u9664",
+                                WS_CHILD | WS_TABSTOP, ctrlX + ScalePx(125, dpi_), y1,
+                                ScalePx(100, dpi_), ScalePx(28, dpi_), hwnd_,
+                                reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdClearDesktopArchiveBtn)),
+                                hInst, nullptr));
 
     // === Tab 2: Data, Backup & Restore ===
     int y2 = py;
@@ -1073,9 +1111,13 @@ void SettingsWindow::BuildControls() {
                     reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdDiagnosticsBtn)), hInst,
                     nullptr));
 
-    // Bottom Close button
+    // Bottom Version label + Close button
     const int closeW = ScalePx(96, dpi_);
     const int closeH = ScalePx(30, dpi_);
+    CreateWindowExW(0, L"STATIC", L"GeekDeskCpp " GEEKDESK_DISPLAY_VERSION_WSTR,
+                    WS_CHILD | WS_VISIBLE | SS_CENTERIMAGE, pad, ch - pad - closeH,
+                    cw - pad * 2 - closeW - ScalePx(12, dpi_), closeH, hwnd_, nullptr, hInst,
+                    nullptr);
     CreateWindowExW(0, L"BUTTON", en ? L"Close" : L"\u5173\u95ED",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP, cw - pad - closeW, ch - pad - closeH,
                     closeW, closeH, hwnd_,
@@ -1173,6 +1215,11 @@ void SettingsWindow::PopulateFromSettings() {
     SendMessageW(itemSortCombo_, CB_SETCURSEL, SortToIdx(working_.behavior.itemSort), 0);
     SendMessageW(autoStartCheck_, BM_SETCHECK,
                  working_.behavior.autoStart ? BST_CHECKED : BST_UNCHECKED, 0);
+    SetWindowTextW(desktopArchiveLabel_,
+                   working_.behavior.desktopArchiveDir.has_value() &&
+                           !working_.behavior.desktopArchiveDir->empty()
+                       ? core::utf8::Utf8ToWide(*working_.behavior.desktopArchiveDir).c_str()
+                       : (en ? L"Not set" : L"\u672A\u8BBE\u7F6E"));
     SetWindowTextW(retentionEdit_, std::to_wstring(working_.behavior.backupRetentionDays).c_str());
 
     RefreshHotKeyHint();

@@ -118,6 +118,7 @@ struct BehaviorSettings {
     SortOrder groupSort = SortOrder::Custom;
     SortOrder itemSort = SortOrder::Custom;
     int backupRetentionDays = 7;
+    std::optional<std::string> desktopArchiveDir;
 };
 
 struct AppearanceSettings {

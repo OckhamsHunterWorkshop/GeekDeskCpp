@@ -3,6 +3,7 @@
 
 #include "core/catalog_mutator.hpp"
 #include "core/catalog_sorter.hpp"
+#include "core/desktop_archive_policy.hpp"
 #include "core/folder_sync.hpp"
 #include "core/hotkey_parser.hpp"
 #include "core/models.hpp"
@@ -777,4 +778,76 @@ TEST_CASE("windows path normalization strips quotes, trims, expands env vars, an
         geekdesk::core::utf8::NormalizeWindowsPathInput(L"\"%SystemRoot%/notepad.exe\"");
     CHECK(envNorm.wstring().find(L"%SystemRoot%") == std::wstring::npos);
     CHECK(envNorm.filename().wstring() == L"notepad.exe");
+}
+
+TEST_CASE("desktop archive policy validates paths, desktop children, OneDrive, and sanitization") {
+    using namespace geekdesk::core;
+
+    CHECK(IsPathEqualOrUnder(L"D:/Archive/Work/doc.docx", L"d:\\archive\\"));
+    CHECK(IsPathEqualOrUnder(L"D:\\Archive", L"d:\\archive\\"));
+    CHECK_FALSE(IsPathEqualOrUnder(L"C:\\Users\\a\\Desktop2\\file.txt", L"C:\\Users\\a\\Desktop"));
+
+    const DesktopKnownFolders desktops{L"C:\\Users\\miku\\OneDrive\\Desktop",
+                                       L"C:\\Users\\Public\\Desktop"};
+    CHECK(IsDirectChildOfDesktop(L"C:/Users/MIKU/onedrive/desktop/test.lnk", desktops));
+    CHECK(IsDirectChildOfDesktop(L"C:\\Users\\Public\\Desktop\\QQ.lnk", desktops));
+    CHECK_FALSE(IsDirectChildOfDesktop(L"C:\\Users\\miku\\OneDrive\\Desktop\\Sub\\inner.txt",
+                                       desktops));
+    CHECK_FALSE(IsDirectChildOfDesktop(L"D:\\Projects\\app.exe", desktops));
+
+    const std::filesystem::path dataDir(L"D:\\Tools\\GeekDeskCpp\\data");
+    CHECK(ValidateArchiveDirectory(L"", desktops, dataDir) == ArchiveDirValidation::Empty);
+    CHECK(ValidateArchiveDirectory(L"C:\\Users\\miku\\OneDrive\\Desktop", desktops, dataDir) ==
+          ArchiveDirValidation::InsideDesktop);
+    CHECK(ValidateArchiveDirectory(L"C:\\Users\\miku\\OneDrive\\Desktop\\Archive", desktops,
+                                   dataDir) == ArchiveDirValidation::InsideDesktop);
+    CHECK(ValidateArchiveDirectory(L"C:\\Users\\miku\\OneDrive", desktops, dataDir) ==
+          ArchiveDirValidation::InsideDesktop);
+    CHECK(ValidateArchiveDirectory(L"D:\\Tools\\GeekDeskCpp\\data\\archive", desktops, dataDir) ==
+          ArchiveDirValidation::InsideAppData);
+    CHECK(ValidateArchiveDirectory(L"D:\\DesktopArchive", desktops, dataDir) ==
+          ArchiveDirValidation::Ok);
+
+    CHECK(WouldLeaveOneDrive(desktops.userDesktop, L"D:\\DesktopArchive"));
+    CHECK_FALSE(WouldLeaveOneDrive(desktops.userDesktop,
+                                   L"C:\\Users\\miku\\OneDrive\\GeekDeskArchive"));
+    CHECK_FALSE(WouldLeaveOneDrive(L"C:\\Users\\miku\\Desktop", L"D:\\DesktopArchive"));
+
+    CHECK(SanitizeGroupFolderName("\xE5\x8A\x9E\xE5\x85\xAC") == L"\x529E\x516C");
+    CHECK(SanitizeGroupFolderName("A/B:C*D?E.") == L"A_B_C_D_E");
+    CHECK(SanitizeGroupFolderName("   ... ") == L"Default");
+    CHECK(SanitizeGroupFolderName("con") == L"_con");
+
+    LaunchItem archivedLnk;
+    archivedLnk.targetPath = "C:\\Program Files\\Tencent\\QQNT\\QQ.exe";
+    archivedLnk.lnkPath = "D:\\DesktopArchive\\Social\\QQ.lnk";
+    const auto foundLnk = FindArchivedPhysicalPath(archivedLnk, L"D:\\DesktopArchive");
+    REQUIRE(foundLnk.has_value());
+    CHECK(foundLnk->wstring() == L"D:\\DesktopArchive\\Social\\QQ.lnk");
+
+    LaunchItem archivedFile;
+    archivedFile.targetPath = "D:\\DesktopArchive\\Work\\report.xlsx";
+    const auto foundFile = FindArchivedPhysicalPath(archivedFile, L"D:\\DesktopArchive");
+    REQUIRE(foundFile.has_value());
+    CHECK(foundFile->wstring() == L"D:\\DesktopArchive\\Work\\report.xlsx");
+
+    LaunchItem nonArchived;
+    nonArchived.targetPath = "C:\\Program Files\\App\\app.exe";
+    CHECK_FALSE(FindArchivedPhysicalPath(nonArchived, L"D:\\DesktopArchive").has_value());
+}
+
+TEST_CASE("settings JSON round-trips optional desktopArchiveDir cleanly") {
+    geekdesk::core::AppSettings s = geekdesk::core::AppSettings::CreateDefault();
+    s.behavior.desktopArchiveDir = "D:\\MyDesktopArchive";
+    const std::string json = geekdesk::storage::SerializeSettings(s);
+    const auto parsed = geekdesk::storage::DeserializeSettings(json);
+    REQUIRE(parsed.ok);
+    REQUIRE(parsed.value.behavior.desktopArchiveDir.has_value());
+    CHECK(*parsed.value.behavior.desktopArchiveDir == "D:\\MyDesktopArchive");
+
+    geekdesk::core::AppSettings sDefault = geekdesk::core::AppSettings::CreateDefault();
+    const std::string jsonDefault = geekdesk::storage::SerializeSettings(sDefault);
+    const auto parsedDefault = geekdesk::storage::DeserializeSettings(jsonDefault);
+    REQUIRE(parsedDefault.ok);
+    CHECK_FALSE(parsedDefault.value.behavior.desktopArchiveDir.has_value());
 }

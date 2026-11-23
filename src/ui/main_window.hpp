@@ -18,8 +18,10 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -121,6 +123,7 @@ private:
                              const std::filesystem::path& rollbackPath);
     void HandleExternalDropHover(POINT screenPt, bool& outAccepted);
     void HandleExternalDropFiles(POINT screenPt, const std::vector<std::filesystem::path>& paths);
+    void ProcessDeferredExternalDrops();
     void UpdateImeCandidateWindowPosition();
     void EnsureTileVisible(std::size_t tileIndex);
     void CancelInternalDrag();
@@ -202,9 +205,16 @@ private:
     HeaderButton hoveredHeaderBtn_ = HeaderButton::None;
     SidebarButton hoveredSidebarBtn_ = SidebarButton::None;
 
+    struct PendingExternalDrop {
+        POINT screenPt{};
+        std::size_t targetGroupIdx = 0;
+        std::vector<std::filesystem::path> paths;
+    };
+
     std::string hotKeyError_;
     std::string statusText_;
     std::uint64_t lastShownTickMs_ = 0;
+    std::deque<PendingExternalDrop> pendingExternalDrops_;
 };
 
 } // namespace geekdesk::ui

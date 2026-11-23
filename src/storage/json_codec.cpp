@@ -126,6 +126,7 @@ void WriteSettingsObject(yyjson_mut_doc* doc,
     AddStr(doc, beh, "itemSort", core::ToString(settings.behavior.itemSort));
     yyjson_mut_obj_add_int(doc, beh, "backupRetentionDays",
                            settings.behavior.backupRetentionDays);
+    AddOptStr(doc, beh, "desktopArchiveDir", settings.behavior.desktopArchiveDir);
     yyjson_mut_obj_add_val(doc, root, "behavior", beh);
 
     yyjson_mut_val* app = yyjson_mut_obj(doc);
@@ -204,6 +205,7 @@ bool ParseSettingsObject(yyjson_val* root,
         ReadEnum(beh, "groupSort", out.behavior.groupSort, core::ParseSortOrder, warnings);
         ReadEnum(beh, "itemSort", out.behavior.itemSort, core::ParseSortOrder, warnings);
         ReadInt(beh, "backupRetentionDays", out.behavior.backupRetentionDays);
+        ReadOptString(beh, "desktopArchiveDir", out.behavior.desktopArchiveDir);
         // Explicitly ignore deprecated fields such as "enableExternalEverything".
     }
 

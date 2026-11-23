@@ -520,7 +520,8 @@ std::optional<ItemMenuAction> ShowItemContextMenu(HWND owner,
                                                   bool isManualGroup,
                                                   bool runAsAdmin,
                                                   core::SortOrder currentItemSort,
-                                                  bool englishUi) {
+                                                  bool englishUi,
+                                                  bool canRestoreToDesktop) {
     std::vector<PopupMenuItem> items;
     if (clickedOnItem) {
         items.push_back({static_cast<UINT>(ItemMenuAction::OpenItem),
@@ -529,6 +530,10 @@ std::optional<ItemMenuAction> ShowItemContextMenu(HWND owner,
                          englishUi ? L"Run as Administrator" : L"\u4EE5\u7BA1\u7406\u5458\u8EAB\u4EFD\u8FD0\u884C"});
         items.push_back({static_cast<UINT>(ItemMenuAction::OpenLocation),
                          englishUi ? L"Open File Location" : L"\u6253\u5F00\u6240\u5728\u4F4D\u7F6E"});
+        if (canRestoreToDesktop) {
+            items.push_back({static_cast<UINT>(ItemMenuAction::RestoreToDesktop),
+                             englishUi ? L"Restore to Desktop" : L"\u79FB\u56DE\u684C\u9762"});
+        }
         items.push_back({0, L"", true, false, false});
         items.push_back({static_cast<UINT>(ItemMenuAction::EditItem),
                          englishUi ? L"Properties..." : L"\u7F16\u8F91\u5C5E\u6027..."});
@@ -568,6 +573,33 @@ std::optional<ItemMenuAction> ShowItemContextMenu(HWND owner,
         return std::nullopt;
     }
     return static_cast<ItemMenuAction>(*cmd);
+}
+
+std::optional<DesktopDropAction> ShowDesktopDropActionMenu(HWND owner,
+                                                           POINT screenPt,
+                                                           bool isDark,
+                                                           std::size_t desktopItemCount,
+                                                           bool englishUi) {
+    std::wstring archiveLabel =
+        englishUi ? L"Move to Archive (Clean Desktop)"
+                  : L"\u79FB\u5165\u6536\u7EB3\u76EE\u5F55\uFF08\u6E05\u7406\u684C\u9762\uFF09";
+    if (desktopItemCount > 1) {
+        archiveLabel +=
+            englishUi ? (L" (" + std::to_wstring(desktopItemCount) + L" items)")
+                      : (L" (" + std::to_wstring(desktopItemCount) + L" \u9879)");
+    }
+
+    const std::vector<PopupMenuItem> items = {
+        {static_cast<UINT>(DesktopDropAction::ArchiveAndCleanDesktop), archiveLabel},
+        {static_cast<UINT>(DesktopDropAction::AddEntryOnly),
+         englishUi ? L"Add Entry Only (Keep on Desktop)"
+                   : L"\u4EC5\u6DFB\u52A0\u5165\u53E3\uFF08\u4FDD\u7559\u684C\u9762\uFF09"},
+    };
+    const auto cmd = ShowThemedPopupMenu(owner, screenPt, isDark, items);
+    if (!cmd.has_value()) {
+        return std::nullopt;
+    }
+    return static_cast<DesktopDropAction>(*cmd);
 }
 
 } // namespace geekdesk::ui
