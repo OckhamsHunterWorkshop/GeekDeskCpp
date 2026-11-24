@@ -3,6 +3,7 @@
 #include "core/catalog_mutator.hpp"
 #include "core/catalog_sorter.hpp"
 #include "core/desktop_archive_policy.hpp"
+#include "core/file_identity.hpp"
 #include "core/folder_sync.hpp"
 #include "core/i18n.hpp"
 #include "core/placement_math.hpp"
@@ -76,6 +77,7 @@ core::LaunchItem BuildLaunchItemFromPath(const std::filesystem::path& filePath) 
         item.kind = core::ItemKind::Folder;
         item.name = core::utf8::PathToUtf8(filePath.filename());
         item.targetPath = fullUtf8;
+        item.fileId = core::CaptureFileIdentity(filePath);
         return item;
     }
 
@@ -90,15 +92,21 @@ core::LaunchItem BuildLaunchItemFromPath(const std::filesystem::path& filePath) 
             }
             item.kind = resolved.isUrl ? core::ItemKind::Url : core::ItemKind::File;
             item.lnkPath = fullUtf8;
+            if (item.kind == core::ItemKind::File) {
+                item.fileId =
+                    core::CaptureFileIdentity(core::utf8::PathFromUtf8(item.targetPath));
+            }
         } else {
             item.kind = core::ItemKind::File;
             item.targetPath = fullUtf8;
+            item.fileId = core::CaptureFileIdentity(filePath);
         }
         return item;
     }
 
     item.kind = core::ItemKind::File;
     item.targetPath = fullUtf8;
+    item.fileId = core::CaptureFileIdentity(filePath);
     if (extLower == ".exe") {
         const std::string stem = core::utf8::PathToUtf8(filePath.stem());
         item.name = stem.empty() ? core::utf8::PathToUtf8(filePath.filename()) : stem;
@@ -1428,13 +1436,23 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
             break;
         case ItemMenuAction::RunAsAdminOnce:
             if (foundIndices) {
+                bool autoRecovered = false;
+                if (!EnsureLaunchTargetReady(targetGroupIdx, targetItemIdx, autoRecovered)) {
+                    break;
+                }
                 core::LaunchItem elevated = catalog_.groups[targetGroupIdx].items[targetItemIdx];
                 elevated.runAsAdmin = true;
                 const auto lr = platform::LaunchCatalogItem(elevated);
                 if (lr.ok) {
-                    catalog_.groups[targetGroupIdx].items[targetItemIdx].launchCount += 1;
-                    catalog_.groups[targetGroupIdx].items[targetItemIdx].lastLaunchedAt =
-                        CurrentUtcIsoTimestamp();
+                    auto& launchedItem = catalog_.groups[targetGroupIdx].items[targetItemIdx];
+                    if ((launchedItem.kind == core::ItemKind::File ||
+                         launchedItem.kind == core::ItemKind::Folder) &&
+                        (!launchedItem.fileId.has_value() || launchedItem.fileId->empty())) {
+                        launchedItem.fileId = core::CaptureFileIdentity(
+                            core::utf8::PathFromUtf8(launchedItem.targetPath));
+                    }
+                    launchedItem.launchCount += 1;
+                    launchedItem.lastLaunchedAt = CurrentUtcIsoTimestamp();
                     ScheduleSaveCatalog();
                     if (settings_.window.hidePolicy == core::HidePolicy::AfterLaunch) {
                         HideWindow();
@@ -1484,6 +1502,11 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                         } else {
                             item.targetPath = restoredUtf8;
                         }
+                        if (item.kind == core::ItemKind::File ||
+                            item.kind == core::ItemKind::Folder) {
+                            item.fileId = core::CaptureFileIdentity(
+                                core::utf8::PathFromUtf8(item.targetPath));
+                        }
                         if (logger_ != nullptr) {
                             logger_->Info("RestoreToDesktop item='" + item.name + "' from='" +
                                           core::utf8::PathToUtf8(*archived) + "' to='" +
@@ -1511,6 +1534,13 @@ void MainWindow::OnRightButtonUp(int xPx, int yPx) {
                 if (ShowItemEditDialog(hwnd_, palette_.isDark,
                                        en ? L"Edit Launch Item" : L"\u7F16\u8F91\u542F\u52A8\u6761\u76EE",
                                        item, en)) {
+                    if (item.kind == core::ItemKind::File ||
+                        item.kind == core::ItemKind::Folder) {
+                        item.fileId =
+                            core::CaptureFileIdentity(core::utf8::PathFromUtf8(item.targetPath));
+                    } else {
+                        item.fileId = std::nullopt;
+                    }
                     core::SortItems(catalog_.groups[targetGroupIdx].items,
                                     settings_.behavior.itemSort);
                     searchEngine_.Rebuild(catalog_);
@@ -2035,28 +2065,156 @@ void MainWindow::SwitchGroupByDelta(int delta) {
     SelectGroup(static_cast<std::size_t>(next), true);
 }
 
+bool MainWindow::EnsureLaunchTargetReady(std::size_t groupIdx,
+                                         std::size_t itemIdx,
+                                         bool& outAutoRecovered) {
+    outAutoRecovered = false;
+    if (groupIdx >= catalog_.groups.size() || itemIdx >= catalog_.groups[groupIdx].items.size()) {
+        return false;
+    }
+
+    auto& grp = catalog_.groups[groupIdx];
+    auto& item = grp.items[itemIdx];
+    if (item.kind != core::ItemKind::File && item.kind != core::ItemKind::Folder) {
+        return true;
+    }
+
+    const std::filesystem::path normTarget =
+        core::utf8::NormalizeWindowsPathInput(core::utf8::Utf8ToWide(item.targetPath));
+    std::error_code ec;
+    if (normTarget.empty() || !normTarget.has_parent_path() ||
+        std::filesystem::exists(normTarget, ec)) {
+        return true;
+    }
+
+    const bool en = core::IsEnglishUi(settings_.appearance.language);
+    bool inRecycleBin = false;
+    if (item.fileId.has_value() && !item.fileId->empty()) {
+        const core::FileIdRecoveryResult rec =
+            core::TryRecoverPathByFileId(*item.fileId, normTarget);
+        if (rec.status == core::FileIdRecoveryStatus::Recovered) {
+            const std::string oldName = item.name;
+            item.targetPath = core::utf8::PathToUtf8(rec.recoveredPath);
+            if (core::ShouldAutoUpdateDisplayName(item.name, normTarget)) {
+                item.name = core::DeriveDisplayNameFromPath(rec.recoveredPath, item.kind);
+            }
+            if (item.lnkPath.has_value() && !item.lnkPath->empty()) {
+                const std::filesystem::path lnkFs =
+                    core::utf8::NormalizeWindowsPathInput(core::utf8::Utf8ToWide(*item.lnkPath));
+                if (lnkFs.empty() || !std::filesystem::exists(lnkFs, ec)) {
+                    item.lnkPath = std::nullopt;
+                }
+            }
+            item.fileId = core::CaptureFileIdentity(rec.recoveredPath);
+            if (logger_ != nullptr) {
+                logger_->Info("AutoRecovered moved/renamed target: '" + oldName + "' -> '" +
+                              item.targetPath + "'");
+            }
+            searchEngine_.Rebuild(catalog_);
+            iconCache_.ClearMemoryCache();
+            RebuildDisplayedItems();
+            ScheduleSaveCatalog();
+            outAutoRecovered = true;
+            return true;
+        }
+        if (rec.status == core::FileIdRecoveryStatus::InRecycleBin) {
+            inRecycleBin = true;
+        }
+    }
+
+    const bool isManual = (grp.kind == core::GroupKind::Manual);
+    ModalGuard guard(modalDepth_);
+    const MissingFileAction action = ShowMissingFileDialog(
+        hwnd_, palette_.isDark, core::utf8::Utf8ToWide(item.name), normTarget.wstring(), isManual,
+        inRecycleBin, en);
+
+    if (action == MissingFileAction::Relocate) {
+        std::optional<std::filesystem::path> chosen;
+        if (item.kind == core::ItemKind::Folder) {
+            chosen = platform::PickFolderDialog(
+                hwnd_, en ? L"Relocate Folder" : L"\u91CD\u65B0\u5B9A\u4F4D\u6587\u4EF6\u5939");
+        } else {
+            chosen = platform::PickFileDialog(
+                hwnd_, en ? L"Relocate Target File" : L"\u91CD\u65B0\u5B9A\u4F4D\u76EE\u6807\u6587\u4EF6");
+        }
+        if (!chosen.has_value()) {
+            statusText_ = en ? "Relocate canceled" : "\u5DF2\u53D6\u6D88\u91CD\u65B0\u5B9A\u4F4D";
+            RequestRender();
+            return false;
+        }
+
+        const std::string chosenUtf8 = core::utf8::PathToUtf8(*chosen);
+        const std::string extLower =
+            core::utf8::ToLowerAscii(core::utf8::PathToUtf8(chosen->extension()));
+        std::filesystem::path finalTarget = *chosen;
+        if (item.kind == core::ItemKind::File && (extLower == ".lnk" || extLower == ".url")) {
+            const auto resolved = platform::ResolveShortcutFile(*chosen);
+            if (resolved.ok) {
+                item.targetPath = resolved.targetPath;
+                item.lnkPath = chosenUtf8;
+                item.kind = resolved.isUrl ? core::ItemKind::Url : core::ItemKind::File;
+                finalTarget = core::utf8::PathFromUtf8(item.targetPath);
+            } else {
+                item.targetPath = chosenUtf8;
+                item.lnkPath = std::nullopt;
+            }
+        } else {
+            item.targetPath = chosenUtf8;
+            item.lnkPath = std::nullopt;
+        }
+
+        if (core::ShouldAutoUpdateDisplayName(item.name, normTarget)) {
+            item.name = core::DeriveDisplayNameFromPath(finalTarget, item.kind);
+        }
+        item.fileId = (item.kind == core::ItemKind::File || item.kind == core::ItemKind::Folder)
+                          ? core::CaptureFileIdentity(finalTarget)
+                          : std::nullopt;
+        searchEngine_.Rebuild(catalog_);
+        iconCache_.ClearMemoryCache();
+        RebuildDisplayedItems();
+        ScheduleSaveCatalog();
+        outAutoRecovered = true;
+        return true;
+    }
+
+    if (action == MissingFileAction::Remove && isManual) {
+        const std::string removedName = item.name;
+        if (core::RemoveItemFromManualGroup(grp, itemIdx)) {
+            searchEngine_.Rebuild(catalog_);
+            RebuildDisplayedItems();
+            ScheduleSaveCatalog();
+            statusText_ = en ? ("Removed missing item: " + removedName)
+                             : ("\u5DF2\u79FB\u9664\u5931\u6548\u6761\u76EE: " + removedName);
+            RequestRender();
+        }
+        return false;
+    }
+
+    statusText_ =
+        en ? (inRecycleBin ? "Source file was deleted to Recycle Bin"
+                           : "Target file not found")
+           : (inRecycleBin ? "\u6E90\u6587\u4EF6\u5DF2\u88AB\u5220\u9664\u81F3\u56DE\u6536\u7AD9"
+                           : "\u627E\u4E0D\u5230\u76EE\u6807\u6587\u4EF6\uFF0C\u8BF7\u68C0\u67E5\u662F\u5426\u5DF2\u5220\u9664\u6216\u6539\u540D");
+    RequestRender();
+    return false;
+}
+
 void MainWindow::LaunchDisplayedIndex(std::size_t index) {
     if (index >= displayedItems_.size() || displayedItems_[index].item == nullptr) {
         return;
     }
-    const core::LaunchItem* targetPtr = displayedItems_[index].item;
-    core::LaunchItem* mutableItem = nullptr;
-
-    for (auto& grp : catalog_.groups) {
-        for (auto& it : grp.items) {
-            if (&it == targetPtr) {
-                mutableItem = &it;
-                break;
-            }
-        }
-        if (mutableItem != nullptr) {
-            break;
-        }
-    }
-    if (mutableItem == nullptr) {
+    std::size_t targetGroupIdx = 0;
+    std::size_t targetItemIdx = 0;
+    if (!FindCatalogIndices(displayedItems_[index].item, targetGroupIdx, targetItemIdx)) {
         return;
     }
 
+    bool autoRecovered = false;
+    if (!EnsureLaunchTargetReady(targetGroupIdx, targetItemIdx, autoRecovered)) {
+        return;
+    }
+
+    core::LaunchItem* mutableItem = &catalog_.groups[targetGroupIdx].items[targetItemIdx];
     const platform::LaunchResult lr = platform::LaunchCatalogItem(*mutableItem);
     if (!lr.ok) {
         statusText_ = "\u542F\u52A8\u5931\u8D25: " + lr.error;
@@ -2067,8 +2225,16 @@ void MainWindow::LaunchDisplayedIndex(std::size_t index) {
         return;
     }
 
+    if ((mutableItem->kind == core::ItemKind::File ||
+         mutableItem->kind == core::ItemKind::Folder) &&
+        (!mutableItem->fileId.has_value() || mutableItem->fileId->empty())) {
+        mutableItem->fileId =
+            core::CaptureFileIdentity(core::utf8::PathFromUtf8(mutableItem->targetPath));
+    }
+
     mutableItem->launchCount += 1;
     mutableItem->lastLaunchedAt = CurrentUtcIsoTimestamp();
+    const std::string launchedName = mutableItem->name;
     if (settings_.behavior.itemSort == core::SortOrder::LaunchCountAsc ||
         settings_.behavior.itemSort == core::SortOrder::LaunchCountDesc) {
         for (auto& grp : catalog_.groups) {
@@ -2079,7 +2245,14 @@ void MainWindow::LaunchDisplayedIndex(std::size_t index) {
     RebuildDisplayedItems();
     ScheduleSaveCatalog();
 
-    statusText_ = "\u5DF2\u542F\u52A8: " + mutableItem->name;
+    const bool en = core::IsEnglishUi(settings_.appearance.language);
+    if (autoRecovered) {
+        statusText_ = en ? ("Auto-updated & launched: " + launchedName)
+                         : ("\u5DF2\u81EA\u52A8\u540C\u6B65\u65B0\u540D\u79F0\u5E76\u542F\u52A8: " +
+                            launchedName);
+    } else {
+        statusText_ = "\u5DF2\u542F\u52A8: " + launchedName;
+    }
     if (settings_.window.hidePolicy == core::HidePolicy::AfterLaunch) {
         HideWindow();
     } else {

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(GeekDeskCpp VERSION 0.2.1 LANGUAGES C CXX)
+project(GeekDeskCpp VERSION 0.2.2 LANGUAGES C CXX)
 
 set(GEEKDESK_VERSION_SUFFIX "-beta")
 set(GEEKDESK_VERSION_STR "${PROJECT_VERSION}${GEEKDESK_VERSION_SUFFIX}")
@@ -57,6 +57,7 @@ add_library(geekdesk_core STATIC
     src/core/folder_sync.cpp
     src/core/search_engine.cpp
     src/core/desktop_archive_policy.cpp
+    src/core/file_identity.cpp
     src/platform/folder_watcher.cpp
     src/storage/json_codec.cpp
     src/storage/atomic_writer.cpp

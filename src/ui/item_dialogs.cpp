@@ -90,6 +90,76 @@ struct ThemeColors {
     }
 };
 
+constexpr int kIdMissingRelocate = 301;
+constexpr int kIdMissingRemove = 302;
+
+struct MissingDialogState {
+    ThemeColors colors;
+    HFONT font = nullptr;
+    MissingFileAction action = MissingFileAction::Cancel;
+    bool done = false;
+
+    explicit MissingDialogState(bool dark) : colors(dark) {}
+    ~MissingDialogState() {
+        if (font) {
+            DeleteObject(font);
+        }
+    }
+};
+
+LRESULT CALLBACK MissingDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* st = reinterpret_cast<MissingDialogState*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (msg == WM_NCCREATE) {
+        const auto* cs = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+        st = static_cast<MissingDialogState*>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(st));
+        return TRUE;
+    }
+    if (st == nullptr) {
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc{};
+        GetClientRect(hwnd, &rc);
+        FillRect(reinterpret_cast<HDC>(wParam), &rc, st->colors.bgBrush);
+        return 1;
+    }
+
+    case WM_CTLCOLORDLG:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return st->colors.HandleColor(msg, wParam);
+
+    case WM_COMMAND: {
+        const int id = LOWORD(wParam);
+        if (id == IDOK || id == kIdMissingRelocate) {
+            st->action = MissingFileAction::Relocate;
+            st->done = true;
+            return 0;
+        }
+        if (id == kIdMissingRemove) {
+            st->action = MissingFileAction::Remove;
+            st->done = true;
+            return 0;
+        }
+        if (id == IDCANCEL) {
+            st->action = MissingFileAction::Cancel;
+            st->done = true;
+            return 0;
+        }
+        break;
+    }
+
+    case WM_CLOSE:
+        st->action = MissingFileAction::Cancel;
+        st->done = true;
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
 struct TextDialogState {
     ThemeColors colors;
     HFONT font = nullptr;
@@ -672,6 +742,127 @@ bool ShowItemEditDialog(HWND owner,
     }
     DestroyWindow(dlg);
     return state.accepted;
+}
+
+MissingFileAction ShowMissingFileDialog(HWND owner,
+                                        bool isDark,
+                                        std::wstring_view itemName,
+                                        std::wstring_view missingPath,
+                                        bool isManualGroup,
+                                        bool inRecycleBin,
+                                        bool englishUi) {
+    const HINSTANCE hInst = GetModuleHandleW(nullptr);
+    constexpr const wchar_t* kCls = L"GeekDeskCppMissingFileDlg";
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = &MissingDlgProc;
+    wc.hInstance = hInst;
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    wc.lpszClassName = kCls;
+    RegisterClassExW(&wc);
+
+    const std::uint32_t dpi = platform::GetWindowDpi(owner);
+    const auto metrics = platform::GetMonitorMetricsForWindow(owner);
+    const int winW = Scale(460, dpi);
+    const int winH = Scale(210, dpi);
+    const auto pos = core::ComputeCenteredPosition(winW, winH, metrics.workArea);
+
+    MissingDialogState state(isDark);
+    state.font = CreateUiFont(dpi, 10);
+
+    const wchar_t* title = englishUi
+                               ? (inRecycleBin ? L"File Moved to Recycle Bin"
+                                               : L"Target File Not Found")
+                               : (inRecycleBin ? L"\u6E90\u6587\u4EF6\u5DF2\u88AB\u79FB\u5165\u56DE\u6536\u7AD9"
+                                               : L"\u627E\u4E0D\u5230\u76EE\u6807\u6587\u4EF6");
+    HWND dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kCls, title,
+                               WS_POPUP | WS_CAPTION | WS_SYSMENU, pos.x, pos.y, winW, winH,
+                               owner, nullptr, hInst, &state);
+    if (dlg == nullptr) {
+        return MissingFileAction::Cancel;
+    }
+
+    const BOOL darkFlag = isDark ? TRUE : FALSE;
+    DwmSetWindowAttribute(dlg, DWMWA_USE_IMMERSIVE_DARK_MODE, &darkFlag, sizeof(darkFlag));
+
+    RECT rc{};
+    GetClientRect(dlg, &rc);
+    const int cw = rc.right - rc.left;
+    const int pad = Scale(16, dpi);
+    const int btnH = Scale(30, dpi);
+    const int btnY = rc.bottom - pad - btnH;
+
+    std::wstring body;
+    if (englishUi) {
+        body = inRecycleBin
+                   ? (L"\"" + std::wstring(itemName) +
+                      L"\" was deleted and moved to the Recycle Bin:\n" +
+                      std::wstring(missingPath) +
+                      L"\n\nYou can relocate this entry to another file or remove it from the group.")
+                   : (L"Cannot find \"" + std::wstring(itemName) + L"\":\n" +
+                      std::wstring(missingPath) +
+                      L"\n\nThe source file may have been renamed, moved across drives, or permanently deleted.");
+    } else {
+        body = inRecycleBin
+                   ? (L"\u201C" + std::wstring(itemName) +
+                      L"\u201D \u7684\u6E90\u6587\u4EF6\u5DF2\u88AB\u5220\u9664\u5E76\u79FB\u5165\u56DE\u6536\u7AD9\uFF1A\n" +
+                      std::wstring(missingPath) +
+                      L"\n\n\u4F60\u53EF\u4EE5\u9009\u62E9\u91CD\u65B0\u5B9A\u4F4D\u5230\u65B0\u6587\u4EF6\uFF0C\u6216\u5C06\u5176\u4ECE\u5206\u7EC4\u79FB\u9664\u3002")
+                   : (L"\u627E\u4E0D\u5230 \u201C" + std::wstring(itemName) + L"\u201D \u7684\u76EE\u6807\u6587\u4EF6\uFF1A\n" +
+                      std::wstring(missingPath) +
+                      L"\n\n\u6E90\u6587\u4EF6\u53EF\u80FD\u5DF2\u88AB\u91CD\u547D\u540D\u3001\u8DE8\u76D8\u79FB\u52A8\u6216\u5F7B\u5E95\u5220\u9664\u3002");
+    }
+
+    CreateWindowExW(0, L"STATIC", body.c_str(), WS_CHILD | WS_VISIBLE | SS_EDITCONTROL, pad, pad,
+                    cw - pad * 2, btnY - pad - Scale(12, dpi), dlg, nullptr, hInst, nullptr);
+
+    const int cancelW = Scale(84, dpi);
+    const int removeW = Scale(108, dpi);
+    const int relocateW = Scale(116, dpi);
+    const int gap = Scale(8, dpi);
+    int rightX = cw - pad - cancelW;
+
+    CreateWindowExW(0, L"BUTTON", englishUi ? L"Cancel" : L"\u53D6\u6D88",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP, rightX, btnY, cancelW, btnH, dlg,
+                    reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDCANCEL)), hInst, nullptr);
+    if (isManualGroup) {
+        rightX -= removeW + gap;
+        CreateWindowExW(0, L"BUTTON", englishUi ? L"Remove" : L"\u4ECE\u5206\u7EC4\u79FB\u9664",
+                        WS_CHILD | WS_VISIBLE | WS_TABSTOP, rightX, btnY, removeW, btnH, dlg,
+                        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdMissingRemove)), hInst,
+                        nullptr);
+    }
+    rightX -= relocateW + gap;
+    HWND relocateBtn = CreateWindowExW(
+        0, L"BUTTON", englishUi ? L"Relocate..." : L"\u91CD\u65B0\u5B9A\u4F4D...",
+        WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, rightX, btnY, relocateW, btnH, dlg,
+        reinterpret_cast<HMENU>(static_cast<INT_PTR>(kIdMissingRelocate)), hInst, nullptr);
+
+    ApplyFontToChildren(dlg, state.font);
+    if (isDark) {
+        EnumChildWindows(
+            dlg,
+            [](HWND ch, LPARAM) -> BOOL {
+                SetWindowTheme(ch, L"DarkMode_Explorer", nullptr);
+                return TRUE;
+            },
+            0);
+    }
+
+    if (owner != nullptr) {
+        EnableWindow(owner, FALSE);
+    }
+    ShowWindow(dlg, SW_SHOW);
+    SetFocus(relocateBtn);
+
+    RunModalLoop(dlg, state.done);
+
+    if (owner != nullptr) {
+        EnableWindow(owner, TRUE);
+        SetForegroundWindow(owner);
+    }
+    DestroyWindow(dlg);
+    return state.action;
 }
 
 } // namespace geekdesk::ui

@@ -16,11 +16,13 @@
 
 ## Highlights
 
-- **Zero-Dependency Native Single Binary**: Statically linked MinGW C++20 executable (~**2.79 MB**). No `.NET`, no `WebView2`, no `Everything64.dll`, and **0 MB VRAM** (zero D3D11/DXGI hardware GPU driver loading).
+- **Zero-Dependency Native Single Binary**: Statically linked MinGW C++20 executable (~**2.88 MB**). No `.NET`, no `WebView2`, no `Everything64.dll`, and **0 MB VRAM** (zero D3D11/DXGI hardware GPU driver loading).
+- **Isolated System File Dialogs (`--dialog-helper`)**: Native Windows Open/Save/Folder dialogs execute in an ephemeral child process via pipes and exit immediately after selection—preventing `explorerframe.dll`, `d3d11`/`dxgi`, and third-party cloud shell extensions (OneDrive, Adobe, etc.) from bloating or destabilizing the main launcher process.
 - **Unified Win10 / Win11 Layered Compositing (Mode A)**: Built on `WS_EX_LAYERED` + `UpdateLayeredWindow` + Direct2D Software (WARP), supporting real **Acrylic**, wallpaper-blurred **Mica / MicaAlt**, custom wallpapers & gradients, `0–24 px` anti-aliased corner radius, card opacity, and live **UI font family / size** tuning.
-- **Desktop Drag-and-Drop Archiving & Unified Rounded Menus**:
+- **Desktop Drag-and-Drop Archiving & On-Demand Rename Recovery**:
   - Dropping shortcuts, files, or folders from the User Desktop (including OneDrive Desktop) or Public Desktop automatically pops a lightweight 2-choice menu: **Move to Archive (Clean Desktop)** or **Add Entry Only (Keep on Desktop)**—asking once per batch drop;
   - Physical files are moved safely via native Windows `IFileOperation` into `<ArchiveDir>\<GroupName>\` (supporting Public Desktop UAC elevation and collision renaming). Renaming, moving across groups, or removing entries inside GeekDeskCpp never deletes original files, and right-clicking archived items offers one-click **Restore to Desktop**;
+  - **On-Demand NTFS File ID Recovery & Missing-File Guidance**: With **0% background scanning**, renaming or moving a tracked file/folder on the same NTFS volume automatically resolves its new path and updates default filenames on click; files moved to the Recycle Bin or permanently deleted are safely intercepted with a themed guidance dialog (**Relocate / Remove / Cancel**);
   - Sidebar bottom quick-action buttons (**`+ Group` / `Link`**) and timer-free cursor-following group drag reordering (in-place ghosting, insertion bar, and floating preview);
   - **2-line wrapped item labels** with strict horizontal icon alignment across every row;
   - Unified dark/light Direct2D rounded popup menus across groups, items, and tray; **Open File Location** uses native `SHOpenFolderAndSelectItems` to jump straight to the real `.exe` location;
@@ -35,12 +37,12 @@
 
 | Metric | Measured Result |
 | :--- | :--- |
-| Single-File Executable Size | `GeekDeskCpp.exe` ~**2.79 MB** (`2,927,616` bytes) |
+| Single-File Executable Size | `GeekDeskCpp.exe` ~**2.88 MB** (`3,023,360` bytes) |
 | External Dependencies (`objdump -p`) | Standard Windows system DLLs only; **no** MinGW runtime DLLs, **no** GPU UMD, **no** `Everything*.dll` |
 | Cold Startup + First Frame (`--smoke-ui`) | **~92 ms**, Private Bytes **~11–12 MB** (~25 MB Working Set) |
 | Catalog Load & Index (9 groups / 78 items) | **~15 ms** |
-| 200-Cycle Headless Soak (`--soak-test 200`) | GDI `63 -> 69`, USER `48 -> 49`, Handles `346 -> 346`, Private Bytes `13.94 MB -> 15.95 MB` (zero leaks) |
-| Daily Idle Footprint (78 items + icon cache) | **~22–26 MB** Private Bytes, **0%** idle CPU, **0 MB** VRAM |
+| 200-Cycle Headless Soak (`--soak-test 200`) | GDI `62 -> 69`, USER `48 -> 49`, Handles `348 -> 348`, Private Bytes `14.63 MB -> 15.75 MB` (zero leaks) |
+| Daily Idle Footprint (78 items + icon cache) | **~22–26 MB** Private Bytes (stays clean even after browsing files), **0%** idle CPU, **0 MB** VRAM |
 
 ---
 

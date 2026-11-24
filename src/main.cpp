@@ -2,6 +2,7 @@
 #include "core/models.hpp"
 #include "core/search_engine.hpp"
 #include "core/utf8.hpp"
+#include "platform/file_dialogs.hpp"
 #include "platform/single_instance.hpp"
 #include "storage/atomic_writer.hpp"
 #include "storage/backup_manager.hpp"
@@ -356,6 +357,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int) {
     int soakCycles = 0;
 
     for (std::size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == L"--dialog-helper") {
+            return geekdesk::platform::RunDialogHelperProcess();
+        }
         if (args[i] == L"--version" || args[i] == L"-v") {
             ConsoleOutput out;
             out.WriteLine(std::string("GeekDeskCpp ") + GEEKDESK_DISPLAY_VERSION + " (built " +

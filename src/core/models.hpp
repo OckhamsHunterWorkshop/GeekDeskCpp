@@ -169,6 +169,7 @@ struct LaunchItem {
     std::optional<std::string> lastLaunchedAt;
     std::optional<std::string> customIconFile;
     std::optional<std::string> tooltip;
+    std::optional<std::string> fileId;
 
     [[nodiscard]] bool IsExecutableOrScript() const noexcept;
 };

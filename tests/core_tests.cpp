@@ -4,6 +4,7 @@
 #include "core/catalog_mutator.hpp"
 #include "core/catalog_sorter.hpp"
 #include "core/desktop_archive_policy.hpp"
+#include "core/file_identity.hpp"
 #include "core/folder_sync.hpp"
 #include "core/hotkey_parser.hpp"
 #include "core/models.hpp"
@@ -850,4 +851,61 @@ TEST_CASE("settings JSON round-trips optional desktopArchiveDir cleanly") {
     const auto parsedDefault = geekdesk::storage::DeserializeSettings(jsonDefault);
     REQUIRE(parsedDefault.ok);
     CHECK_FALSE(parsedDefault.value.behavior.desktopArchiveDir.has_value());
+}
+
+TEST_CASE("file identity tracks same-volume renames, rejects deleted files and recycle bin, and respects custom nicknames") {
+    using namespace geekdesk::core;
+
+    CHECK(IsPathInRecycleBin(L"W:\\$Recycle.Bin\\S-1-5-21-123\\$RABC.txt"));
+    CHECK(IsPathInRecycleBin(L"C:/$RECYCLE.BIN/S-1-5-21/test.exe"));
+    CHECK_FALSE(IsPathInRecycleBin(L"W:\\Work\\doc.txt"));
+
+    CHECK(ShouldAutoUpdateDisplayName("\xE6\x96\xB0\xE5\xBB\xBA\xE6\x96\x87\xE6\x9C\xAC\xE6\x96\x87\xE6\xA1\xA3.txt",
+                                      L"D:\\Notes\\\x65B0\x5EFA\x6587\x672C\x6587\x6863.txt"));
+    CHECK(ShouldAutoUpdateDisplayName("QQ", L"C:\\Program Files\\Tencent\\QQNT\\QQ.exe"));
+    CHECK_FALSE(ShouldAutoUpdateDisplayName("\xE6\x88\x91\xE7\x9A\x84\xE8\x84\x9A\xE6\x9C\xAC",
+                                            L"D:\\Notes\\old.txt"));
+
+    CHECK(DeriveDisplayNameFromPath(L"D:\\Scripts\\\x9CB8\x4E91\x6269\x5C55\x811A\x672C.txt",
+                                    ItemKind::File) ==
+          "\xE9\xB2\xB8\xE4\xBA\x91\xE6\x89\xA9\xE5\xB1\x95\xE8\x84\x9A\xE6\x9C\xAC.txt");
+    CHECK(DeriveDisplayNameFromPath(L"C:\\Tools\\MyApp.exe", ItemKind::File) == "MyApp");
+
+    TempDirGuard dir("file_id_recovery");
+    const std::filesystem::path oldFile = dir.path / L"old_doc.txt";
+    const std::filesystem::path renamedFile = dir.path / L"renamed_doc.txt";
+    REQUIRE(geekdesk::storage::WriteFileAtomic(oldFile, "hello").ok);
+
+    const auto captured = CaptureFileIdentity(oldFile);
+    REQUIRE(captured.has_value());
+
+    std::error_code ec;
+    std::filesystem::rename(oldFile, renamedFile, ec);
+    REQUIRE_FALSE(ec);
+
+    const FileIdRecoveryResult recovered = TryRecoverPathByFileId(*captured, oldFile);
+    CHECK(recovered.status == FileIdRecoveryStatus::Recovered);
+    CHECK(recovered.recoveredPath.filename().wstring() == L"renamed_doc.txt");
+
+    std::filesystem::remove(renamedFile, ec);
+    REQUIRE_FALSE(ec);
+    const FileIdRecoveryResult deletedRes = TryRecoverPathByFileId(*captured, oldFile);
+    CHECK(deletedRes.status == FileIdRecoveryStatus::NotFound);
+
+    CatalogDocument cat = CatalogDocument::CreateDefault();
+    LaunchItem item;
+    item.id = "item-1";
+    item.name = "old_doc.txt";
+    item.kind = ItemKind::File;
+    item.targetPath = utf8::PathToUtf8(oldFile);
+    item.fileId = captured;
+    cat.groups[0].items.push_back(item);
+
+    const std::string catJson = geekdesk::storage::SerializeCatalog(cat);
+    const auto parsedCat = geekdesk::storage::DeserializeCatalog(catJson);
+    REQUIRE(parsedCat.ok);
+    REQUIRE(parsedCat.value.groups.size() == 1);
+    REQUIRE(parsedCat.value.groups[0].items.size() == 1);
+    REQUIRE(parsedCat.value.groups[0].items[0].fileId.has_value());
+    CHECK(*parsedCat.value.groups[0].items[0].fileId == *captured);
 }

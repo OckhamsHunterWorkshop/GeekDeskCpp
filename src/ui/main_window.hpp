@@ -112,6 +112,9 @@ private:
     void SelectGroup(std::size_t index, bool persistSelection);
     void SwitchGroupByDelta(int delta);
     void LaunchDisplayedIndex(std::size_t index);
+    [[nodiscard]] bool EnsureLaunchTargetReady(std::size_t groupIdx,
+                                               std::size_t itemIdx,
+                                               bool& outAutoRecovered);
     void SyncAllLinkedFolders(bool showFeedback);
     void RestartFolderWatchers();
     void OpenSettingsWindow();

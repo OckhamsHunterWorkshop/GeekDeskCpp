@@ -36,4 +36,8 @@ struct FileFilterSpec {
 /// Open Windows Explorer selecting the given file or folder.
 bool RevealInExplorer(const std::filesystem::path& path);
 
+/// Entry point for `--dialog-helper` isolated child process that hosts Windows COM file/folder
+/// dialogs via stdin/stdout pipes so shell extensions stay out of the main launcher process.
+[[nodiscard]] int RunDialogHelperProcess();
+
 } // namespace geekdesk::platform

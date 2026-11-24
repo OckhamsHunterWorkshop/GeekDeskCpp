@@ -271,6 +271,7 @@ void WriteCatalogObject(yyjson_mut_doc* doc,
             AddOptStr(doc, iObj, "lastLaunchedAt", item.lastLaunchedAt);
             AddOptStr(doc, iObj, "customIconFile", item.customIconFile);
             AddOptStr(doc, iObj, "tooltip", item.tooltip);
+            AddOptStr(doc, iObj, "fileId", item.fileId);
             yyjson_mut_arr_append(itemsArr, iObj);
         }
         yyjson_mut_obj_add_val(doc, gObj, "items", itemsArr);
@@ -358,6 +359,7 @@ bool ParseCatalogObject(yyjson_val* root,
                 ReadOptString(iVal, "lastLaunchedAt", item.lastLaunchedAt);
                 ReadOptString(iVal, "customIconFile", item.customIconFile);
                 ReadOptString(iVal, "tooltip", item.tooltip);
+                ReadOptString(iVal, "fileId", item.fileId);
                 group.items.push_back(std::move(item));
             }
         }
