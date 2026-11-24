@@ -8,7 +8,7 @@
 **极简、原生、极致效率的 Windows 10/11 桌面快速启动器（C++20 + Win32 + Direct2D Software）。**
 
 > **设计哲学：做减法，少即是多。**  
-> 砍掉动辄 110~330 MB 内存的 .NET/WPF 运行时、砍掉臃肿的 Everything 全盘检索与过时迁移包袱，只保留启动器最核心的 **毫秒级呼出、离线拼音直达、文件夹联动、Win10/Win11 统一分层视效与可靠的数据备份恢复**。
+> 基于纯原生 C++20 与 Win32 打造，不依赖外部运行时与插件，专注于桌面启动器最核心的体验：**毫秒级呼出、离线拼音直达、文件夹联动、桌面拖放收纳、Win10/Win11 统一分层视效与可靠的本地备份恢复**。
 
 <img width="824" height="620" alt="GeekDeskCpp" src="./GeekDeskCppDemo.png" />
 
@@ -16,7 +16,7 @@
 
 ## 核心特性
 
-- **原生零依赖单文件**：MinGW C++20 静态链接，单文件约 **2.88 MB**；无 `.NET`、无 `WebView2`、无 `Everything64.dll`、**0 MB 显存占用**（不加载 D3D11/DXGI GPU 用户态驱动）。
+- **原生零依赖单文件**：MinGW C++20 静态链接，单文件约 **2.88 MB**；无外部运行时或第三方组件依赖，**0 MB 显存占用**（不加载 D3D11/DXGI GPU 用户态驱动）。
 - **系统文件选择框进程隔离（`--dialog-helper`）**：选择文件、文件夹与保存备份等系统对话框在短命子进程中运行，选完即退出释放——彻底避免 `explorerframe.dll`、`d3d11`/`dxgi` 以及 OneDrive / Adobe / 各类网盘外壳扩展常驻污染主进程。
 - **Win10 / Win11 统一分层合成（Mode A）**：采用 `WS_EX_LAYERED` + `UpdateLayeredWindow` + Direct2D Software（WARP），支持真实 **亚克力透明 (Acrylic)**、桌面壁纸模糊 **云母 / 深云母 (Mica / MicaAlt)**、自定义壁纸与渐变、`0~24 px` 抗锯齿圆角、卡片遮罩浓度，以及 **界面字体 / 字号** 实时调节。
 - **桌面拖放收纳 & 按需改名追回**：
@@ -82,4 +82,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps
 
 ## 致敬
 
-本项目的设计灵感致敬开源项目 [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk)（基于 C++20 + Win32 + Direct2D 从零重写，聚焦极简与低内存占用）。
+由衷感谢开源项目 [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk) 在产品设计与交互理念上带来的宝贵灵感！`GeekDeskCpp` 是受其启发而用 C++20 + Win32 + Direct2D 独立重写的一个轻量极简版本，专注于单纯的快速启动与超低资源占用。

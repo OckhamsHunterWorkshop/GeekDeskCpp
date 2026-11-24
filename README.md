@@ -8,7 +8,7 @@
 **A minimal, ultra-fast native Windows 10/11 desktop launcher built with C++20, Win32, and Direct2D Software.**
 
 > **Design Philosophy: Less is more.**  
-> Stripping away the 110–330 MB `.NET`/WPF runtime, external Everything indexing overhead, and legacy bloat—leaving only instant reflex-like launch, offline Pinyin & acronym search, live folder sync, unified Win10/Win11 layered glass visuals, and rock-solid backup/recovery.
+> Built natively in C++20 and Win32 with zero external runtimes, focusing purely on core launcher essentials: reflex-like toggle speed, offline Pinyin & acronym search, live folder sync, desktop drag-and-drop archiving, unified Win10/Win11 layered visuals, and reliable local backup/recovery.
 
 <img width="824" height="620" alt="GeekDeskCpp" src="./GeekDeskCppDemo.png" />
 
@@ -16,7 +16,7 @@
 
 ## Highlights
 
-- **Zero-Dependency Native Single Binary**: Statically linked MinGW C++20 executable (~**2.88 MB**). No `.NET`, no `WebView2`, no `Everything64.dll`, and **0 MB VRAM** (zero D3D11/DXGI hardware GPU driver loading).
+- **Zero-Dependency Native Single Binary**: Statically linked MinGW C++20 executable (~**2.88 MB**). No external runtimes or third-party DLLs required, and **0 MB VRAM** (zero D3D11/DXGI hardware GPU driver loading).
 - **Isolated System File Dialogs (`--dialog-helper`)**: Native Windows Open/Save/Folder dialogs execute in an ephemeral child process via pipes and exit immediately after selection—preventing `explorerframe.dll`, `d3d11`/`dxgi`, and third-party cloud shell extensions (OneDrive, Adobe, etc.) from bloating or destabilizing the main launcher process.
 - **Unified Win10 / Win11 Layered Compositing (Mode A)**: Built on `WS_EX_LAYERED` + `UpdateLayeredWindow` + Direct2D Software (WARP), supporting real **Acrylic**, wallpaper-blurred **Mica / MicaAlt**, custom wallpapers & gradients, `0–24 px` anti-aliased corner radius, card opacity, and live **UI font family / size** tuning.
 - **Desktop Drag-and-Drop Archiving & On-Demand Rename Recovery**:
@@ -82,4 +82,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-release.ps
 
 ## Acknowledgements
 
-Design inspiration pays tribute to the open-source project [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk) (rewritten from scratch in C++20 + Win32 + Direct2D with a strict focus on minimalism and low memory footprint).
+Sincere thanks and tribute to the original open-source project [BookerLiu/GeekDesk](https://github.com/BookerLiu/GeekDesk) for its thoughtful design and interaction inspiration. `GeekDeskCpp` is an independent minimalist C++20 + Win32 + Direct2D reimplementation focused purely on ultra-lightweight quick launching.
